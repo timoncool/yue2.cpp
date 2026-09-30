@@ -165,6 +165,12 @@ per tensor `.alpha`, `__metadata__` alpha and `adapter_config.json` alpha are
 honoured in that order. `GET /props` lists the directory with the halves
 each entry touches.
 
+`--companion <file>` names a decoder adapter the server merges at scale 1
+under every render, first in the NAR list, before the request's adapters:
+Mothersuperior's `nar_lora_joint_v9.safetensors`, the pair of the tokenizer
+head LoRA trainers turn songs into codes with, is one. It must adapt the NAR
+half only, and a file the server cannot read stops it at start.
+
 ## Server options
 
 ```
@@ -177,6 +183,8 @@ Required:
 Optional:
   --transcriber <gguf>   SheetSage2 GGUF, enables /transcribe
   --adapters <dir>       Adapter directory, requests name its entries
+  --companion <file>     Decoder adapter merged at scale 1 under every render,
+                         before the request's adapters
   --host <addr>          Listen address (default: 0.0.0.0)
   --port <N>             Listen port (default: 8087)
   --max-batch <N>        Song batch limit, one KV set each (default: 1)
@@ -209,8 +217,8 @@ come out song-major.
 
 **GET /health** - Returns `{"status":"ok"}`.
 
-**GET /props** - Server version, model paths, frame rate, context, the
-default request parameters, and the adapters of `--adapters`.
+**GET /props** - Server version, model paths, the companion, frame rate,
+context, the default request parameters, and the adapters of `--adapters`.
 
 **GET /logs** - SSE stream of server stderr.
 

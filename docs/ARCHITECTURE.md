@@ -674,6 +674,8 @@ Required:
 Optional:
   --transcriber <gguf>   SheetSage2 GGUF, enables /transcribe
   --adapters <dir>       Adapter directory, requests name its entries
+  --companion <file>     Decoder adapter merged at scale 1 under every render,
+                         before the request's adapters
   --host <addr>          Listen address (default: 0.0.0.0)
   --port <N>             Listen port (default: 8087)
   --max-batch <N>        Song batch limit, one KV set each (default: 1)

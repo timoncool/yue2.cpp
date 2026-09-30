@@ -419,6 +419,7 @@ static std::string  g_model_path;
 static std::string  g_vae_path;
 static std::string  g_transcriber_path;
 static std::string  g_adapters_dir;
+static std::string  g_companion_path;
 
 static void on_signal(int) {
     active_job_cancel();
@@ -451,6 +452,7 @@ static void handle_props(const httplib::Request &, httplib::Response & res) {
     yyjson_mut_obj_add_str(doc, root, "version", YUE2_VERSION);
     yyjson_mut_obj_add_strncpy(doc, root, "model", g_model_path.c_str(), g_model_path.size());
     yyjson_mut_obj_add_strncpy(doc, root, "vae", g_vae_path.c_str(), g_vae_path.size());
+    yyjson_mut_obj_add_strncpy(doc, root, "companion", g_companion_path.c_str(), g_companion_path.size());
     yyjson_mut_obj_add_int(doc, root, "sample_rate", YUE2_SAMPLE_RATE);
     yyjson_mut_obj_add_int(doc, root, "frame_rate", YUE2_FRAME_RATE);
     yyjson_mut_obj_add_int(doc, root, "context", YUE2_CONTEXT);
@@ -621,6 +623,8 @@ static void print_usage(const char * prog) {
             "Optional:\n"
             "  --transcriber <gguf>   SheetSage2 GGUF, enables /transcribe\n"
             "  --adapters <dir>       Adapter directory, requests name its entries\n"
+            "  --companion <file>     Decoder adapter merged at scale 1 under every render,\n"
+            "                         before the request's adapters\n"
             "  --host <addr>          Listen address (default: 0.0.0.0)\n"
             "  --port <N>             Listen port (default: 8087)\n"
             "  --max-batch <N>        Song batch limit, one KV set each (default: 1)\n"
@@ -655,6 +659,8 @@ int main(int argc, char ** argv) {
             g_transcriber_path = argv[++i];
         } else if (!strcmp(argv[i], "--adapters") && !last) {
             g_adapters_dir = argv[++i];
+        } else if (!strcmp(argv[i], "--companion") && !last) {
+            g_companion_path = argv[++i];
         } else if (!strcmp(argv[i], "--host") && !last) {
             host = argv[++i];
         } else if (!strcmp(argv[i], "--port") && !last) {
@@ -686,6 +692,15 @@ int main(int argc, char ** argv) {
         print_usage(argv[0]);
         return 1;
     }
+    if (!g_companion_path.empty()) {
+        AdapterInfo info = adapter_inspect(g_companion_path);
+        if (!info.ok || info.ar_keys > 0) {
+            fprintf(stderr, "[Server] FATAL: --companion %s: %s\n", g_companion_path.c_str(),
+                    info.ok ? "the companion adapts the decoder only, this file also adapts the LM" : info.error.c_str());
+            return 1;
+        }
+        fprintf(stderr, "[Server] Companion %s: %d decoder keys\n", g_companion_path.c_str(), info.nar_keys);
+    }
 
     LogCapture log_capture;
 
@@ -695,6 +710,7 @@ int main(int argc, char ** argv) {
     g_pipeline.store            = store_create(g_keep_loaded ? EVICT_NEVER : EVICT_STRICT);
     g_pipeline.transcriber_path = g_transcriber_path;
     g_pipeline.adapters_dir     = g_adapters_dir;
+    g_pipeline.companion_path   = g_companion_path;
     if (!pipeline_configure(&g_pipeline, g_model_path.c_str(), g_vae_path.c_str(), params)) {
         store_free(g_pipeline.store);
         return 1;

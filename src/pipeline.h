@@ -55,6 +55,7 @@ struct Yue2Pipeline {
     std::string        vae_path;
     std::string        transcriber_path;  // the SheetSage2 GGUF, empty without one
     std::string        adapters_dir;      // where request adapter names resolve, empty without one
+    std::string        companion_path;    // decoder adapter merged at scale 1 under every NAR load, empty without one
     Yue2PipelineParams params;
     DebugDumper        dumper;
 
@@ -159,7 +160,8 @@ static void pipeline_free(Yue2Pipeline * p) {
 
 // Splits the adapters of a request into the two halves. An adapter that holds
 // nothing for a half, or has a zero scale there, stays out of that half's
-// list, so changing it never reloads the other half.
+// list, so changing it never reloads the other half. The companion leads the
+// NAR list of every request: request adapters were trained on top of it.
 static bool pipeline_resolve_adapters(const Yue2Pipeline *       p,
                                       const Yue2Request &        r,
                                       std::vector<AdapterSpec> * ar,
@@ -167,6 +169,9 @@ static bool pipeline_resolve_adapters(const Yue2Pipeline *       p,
                                       std::string *              error) {
     ar->clear();
     nar->clear();
+    if (!p->companion_path.empty()) {
+        nar->push_back({ p->companion_path, 1.0f });
+    }
     for (const auto & a : r.adapters) {
         std::string path;
         if (!adapter_resolve(p->adapters_dir, a.name, &path)) {
