@@ -504,6 +504,37 @@ static std::vector<std::string> adapter_files(const std::string & path) {
     return files;
 }
 
+// Whether two adapter entries are one file byte for byte, so the companion a
+// request also names from the adapter directory is not merged a second time.
+static bool adapter_same_weights(const std::string & a, const std::string & b) {
+    std::vector<std::string> fa = adapter_files(a);
+    std::vector<std::string> fb = adapter_files(b);
+    struct stat              sa, sb;
+    if (fa.size() != 1 || fb.size() != 1 || stat(fa[0].c_str(), &sa) != 0 || stat(fb[0].c_str(), &sb) != 0 ||
+        sa.st_size != sb.st_size) {
+        return false;
+    }
+    FILE *            ha   = fopen(fa[0].c_str(), "rb");
+    FILE *            hb   = fopen(fb[0].c_str(), "rb");
+    bool              same = ha && hb;
+    std::vector<char> ba(1 << 20), bb(1 << 20);
+    while (same) {
+        size_t na = fread(ba.data(), 1, ba.size(), ha);
+        size_t nb = fread(bb.data(), 1, bb.size(), hb);
+        same      = na == nb && memcmp(ba.data(), bb.data(), na) == 0;
+        if (na == 0) {
+            break;
+        }
+    }
+    if (ha) {
+        fclose(ha);
+    }
+    if (hb) {
+        fclose(hb);
+    }
+    return same;
+}
+
 // A parameterisation whose delta is not B @ A (or kron) cannot be merged as
 // one; empty when the file is plain LoRA, LoKr or a diff.
 static std::string adapter_unsupported(const STFile & st, const std::map<std::string, std::string> & meta) {

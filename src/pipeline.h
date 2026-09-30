@@ -185,6 +185,18 @@ static bool pipeline_resolve_adapters(const Yue2Pipeline *       p,
         }
         float ar_scale  = std::isnan(a.ar_scale) ? a.scale : a.ar_scale;
         float nar_scale = std::isnan(a.nar_scale) ? a.scale : a.nar_scale;
+        if (!p->companion_path.empty() && adapter_same_weights(path, p->companion_path)) {
+            // the request's strength for the companion, and still one merge
+            fprintf(stderr, "[Pipeline] %s is the companion: merged once at scale %.2f\n", a.name.c_str(),
+                    (double) nar_scale);
+            if (!nar->empty() && nar->front().path == p->companion_path) {
+                nar->erase(nar->begin());
+            }
+            if (nar_scale != 0.0f) {
+                nar->insert(nar->begin(), { p->companion_path, nar_scale });
+            }
+            continue;
+        }
         if (info.ar_keys > 0 && ar_scale != 0.0f) {
             ar->push_back({ path, ar_scale });
         }
