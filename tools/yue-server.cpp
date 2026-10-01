@@ -420,6 +420,7 @@ static std::string  g_vae_path;
 static std::string  g_transcriber_path;
 static std::string  g_adapters_dir;
 static std::string  g_companion_path;
+static const BPETokenizer * g_tokenizer = nullptr;
 
 static void on_signal(int) {
     active_job_cancel();
@@ -456,6 +457,7 @@ static void handle_props(const httplib::Request &, httplib::Response & res) {
     yyjson_mut_obj_add_int(doc, root, "sample_rate", YUE2_SAMPLE_RATE);
     yyjson_mut_obj_add_int(doc, root, "frame_rate", YUE2_FRAME_RATE);
     yyjson_mut_obj_add_int(doc, root, "context", YUE2_CONTEXT);
+    yyjson_mut_obj_add_bool(doc, root, "tokenize", g_tokenizer != nullptr);
 
     // The defaults are the request schema itself, serialized by the request
     // writer and grafted here: one source of truth, one float formatting
@@ -487,6 +489,65 @@ static void handle_props(const httplib::Request &, httplib::Response & res) {
     char * json = yyjson_mut_write(doc, 0, NULL);
     res.set_content(json ? json : "{}", "application/json");
     if (json) {
+        free(json);
+    }
+    yyjson_mut_doc_free(doc);
+}
+
+// The checkpoint tokenizer is loaded before worker threads and stays immutable.
+static void handle_tokenize(const httplib::Request & req, httplib::Response & res) {
+    yyjson_doc * input = yyjson_read(req.body.data(), req.body.size(), 0);
+    yyjson_val * root = input ? yyjson_doc_get_root(input) : nullptr;
+    yyjson_val * style_value = root ? yyjson_obj_get(root, "style") : nullptr;
+    yyjson_val * lyrics_value = root ? yyjson_obj_get(root, "lyrics") : nullptr;
+    if (!yyjson_is_obj(root) || !yyjson_is_str(style_value) || !yyjson_is_str(lyrics_value)) {
+        if (input) yyjson_doc_free(input);
+        res.status = 400;
+        res.set_content(json_string("error", "style and lyrics must be strings"), "application/json");
+        return;
+    }
+    std::string style(yyjson_get_str(style_value), yyjson_get_len(style_value));
+    std::string lyrics(yyjson_get_str(lyrics_value), yyjson_get_len(lyrics_value));
+    yyjson_val * cot_value = yyjson_obj_get(root, "cot");
+    std::string cot = yyjson_is_str(cot_value) ? yyjson_get_str(cot_value) : "full";
+    yyjson_doc_free(input);
+    if (style.size() + lyrics.size() > 65536 || (cot != "full" && cot != "melody" && cot != "off")) {
+        res.status = 400;
+        res.set_content(json_string("error", "invalid cot or text longer than 65536 bytes"), "application/json");
+        return;
+    }
+    const std::string normalized_lyrics = uni_nfc(lyrics);
+    Yue2Cot mode = cot == "off" ? YUE2_COT_OFF : cot == "melody" ? YUE2_COT_MELODY : YUE2_COT_FULL;
+    const std::string text = uni_nfc(yue2_request_text(mode, style, normalized_lyrics));
+    const auto ids = bpe_encode(g_tokenizer, text);
+    yyjson_mut_doc * doc = yyjson_mut_doc_new(nullptr);
+    yyjson_mut_val * answer = yyjson_mut_obj(doc);
+    yyjson_mut_doc_set_root(doc, answer);
+    yyjson_mut_obj_add_bool(doc, answer, "available", true);
+    yyjson_mut_obj_add_strncpy(doc, answer, "text", text.data(), text.size());
+    yyjson_mut_obj_add_strncpy(doc, answer, "lyrics", normalized_lyrics.data(), normalized_lyrics.size());
+    yyjson_mut_obj_add_uint(doc, answer, "lyrics_start_bytes", text.size() - normalized_lyrics.size() - 1);
+    yyjson_mut_obj_add_uint(doc, answer, "lyrics_end_bytes", text.size() - 1);
+    yyjson_mut_val * pieces = yyjson_mut_arr(doc);
+    std::string restored;
+    for (int id : ids) {
+        const std::string bytes = bpe_decode(g_tokenizer, std::vector<int>{id});
+        yyjson_mut_val * piece = yyjson_mut_arr_add_obj(doc, pieces);
+        yyjson_mut_obj_add_int(doc, piece, "id", id);
+        yyjson_mut_obj_add_uint(doc, piece, "start", restored.size());
+        restored += bytes;
+        yyjson_mut_obj_add_uint(doc, piece, "end", restored.size());
+        yyjson_mut_val * raw = yyjson_mut_arr(doc);
+        for (unsigned char byte : bytes) yyjson_mut_arr_add_uint(doc, raw, byte);
+        yyjson_mut_obj_add_val(doc, piece, "bytes", raw);
+    }
+    yyjson_mut_obj_add_val(doc, answer, "pieces", pieces);
+    if (restored != text) {
+        res.status = 500;
+        res.set_content(json_string("error", "token bytes do not reproduce normalized text"), "application/json");
+    } else {
+        char * json = yyjson_mut_write(doc, 0, nullptr);
+        res.set_content(json ? json : "{}", "application/json");
         free(json);
     }
     yyjson_mut_doc_free(doc);
@@ -715,6 +776,7 @@ int main(int argc, char ** argv) {
         store_free(g_pipeline.store);
         return 1;
     }
+    g_tokenizer = store_bpe(g_pipeline.store, g_model_path.c_str());
 
     std::thread worker(worker_main);
 
@@ -742,6 +804,7 @@ int main(int argc, char ** argv) {
     });
 
     svr.Get("/props", handle_props);
+    svr.Post("/tokenize", handle_tokenize);
 
     svr.Get("/logs", handle_logs);
 
