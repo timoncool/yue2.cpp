@@ -19,7 +19,7 @@
 //       groups, not single modules:
 //         AR         = { LM }        the score and semantic stages
 //         SYNTH      = { NAR, VAE }  the flow matching and the decode, per song
-//         TRANSCRIBE = { SS2 }       the audio to score transcriber
+//         TRANSCRIBE = { SS2, ATOK } the heads that listen to a recording
 //       Modules in the same group coexist freely. A require from another
 //       group evicts every idle module of the resident group.
 //
@@ -38,8 +38,9 @@
 // gets evicted, following the policy above set at creation time.
 //
 // Keys
-//   A module is uniquely identified by (kind, path). Two requires with the
-//   same key return the same instance.
+//   A module is uniquely identified by (kind, path, adapters). Two requires
+//   with the same key return the same instance. A half under another
+//   adapter list is another module, a swap like a quantization swap.
 //
 // Refcounting
 //   Each module has a refcount. require increments it, release decrements.
@@ -52,6 +53,7 @@
 //   serializes GPU work on one worker; HTTP handlers never touch the
 //   store. Adding a second worker requires adding a mutex here first.
 
+#include "audio-tokenizer.h"
 #include "bpe.h"
 #include "nar.h"
 #include "qwen3-lm.h"
@@ -65,10 +67,11 @@
 struct ModelStore;
 
 enum ModelKind {
-    MODEL_LM,   // Qwen3LM  the AR half of the backbone GGUF
-    MODEL_NAR,  // Yue2NAR  the NAR half of the same GGUF
-    MODEL_VAE,  // VAEGGML  from the VAE GGUF
-    MODEL_SS2,  // SheetSage2 from the transcriber GGUF
+    MODEL_LM,    // Qwen3LM  the AR half of the backbone GGUF
+    MODEL_NAR,   // Yue2NAR  the NAR half of the same GGUF
+    MODEL_VAE,   // VAEGGML  from the VAE GGUF
+    MODEL_SS2,   // SheetSage2 from the transcriber GGUF
+    MODEL_ATOK,  // AudioTokenizer from the audio tokenizer GGUF
 };
 
 struct ModelKey {
@@ -93,10 +96,11 @@ EvictPolicy  store_policy(const ModelStore * s);
 // matching release. In EVICT_STRICT, require evicts every module outside
 // its coexistence group whose refcount is zero; if any conflicting module
 // has refcount > 0 the store aborts (a programming error in the caller).
-Qwen3LM *    store_require_lm(ModelStore * s, const ModelKey & k);
-Yue2NAR *    store_require_nar(ModelStore * s, const ModelKey & k);
-VAEGGML *    store_require_vae(ModelStore * s, const ModelKey & k);
-SheetSage2 * store_require_ss2(ModelStore * s, const ModelKey & k);
+Qwen3LM *        store_require_lm(ModelStore * s, const ModelKey & k);
+Yue2NAR *        store_require_nar(ModelStore * s, const ModelKey & k);
+VAEGGML *        store_require_vae(ModelStore * s, const ModelKey & k);
+SheetSage2 *     store_require_ss2(ModelStore * s, const ModelKey & k);
+AudioTokenizer * store_require_atok(ModelStore * s, const ModelKey & k);
 
 // Release decrements the refcount for the module behind this handle.
 // Pass exactly the pointer returned by require. After release, the pointer

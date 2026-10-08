@@ -421,6 +421,7 @@ static std::string  g_transcriber_path;
 static std::string  g_adapters_dir;
 static std::string  g_companion_path;
 static const BPETokenizer * g_tokenizer = nullptr;
+static std::string  g_tokenizer_path;
 
 static void on_signal(int) {
     active_job_cancel();
@@ -457,7 +458,8 @@ static void handle_props(const httplib::Request &, httplib::Response & res) {
     yyjson_mut_obj_add_int(doc, root, "sample_rate", YUE2_SAMPLE_RATE);
     yyjson_mut_obj_add_int(doc, root, "frame_rate", YUE2_FRAME_RATE);
     yyjson_mut_obj_add_int(doc, root, "context", YUE2_CONTEXT);
-    yyjson_mut_obj_add_bool(doc, root, "tokenize", g_tokenizer != nullptr);
+    yyjson_mut_obj_add_bool(doc, root, "tokenize_text", g_tokenizer != nullptr);
+    yyjson_mut_obj_add_bool(doc, root, "tokenize", !g_tokenizer_path.empty());
 
     // The defaults are the request schema itself, serialized by the request
     // writer and grafted here: one source of truth, one float formatting
@@ -610,7 +612,7 @@ static bool validate(const httplib::Request & req, httplib::Response & res, Yue2
 static void run_transcribe(std::shared_ptr<Job> job, std::vector<float> audio, bool melody_only) {
     active_job_set(job);
     fprintf(stderr, "[Server] Transcribe job %s: %.1f s of audio, %s\n", job->id.c_str(),
-            (double) audio.size() / SS2_SAMPLE_RATE, melody_only ? "melody only" : "full score");
+            (double) audio.size() / MERT_SAMPLE_RATE, melody_only ? "melody only" : "full score");
     std::string abc, error;
     bool        ok = pipeline_transcribe(&g_pipeline, audio.data(), (int) audio.size(), melody_only, &abc, &error);
     active_job_set(nullptr);
@@ -620,6 +622,26 @@ static void run_transcribe(std::shared_ptr<Job> job, std::vector<float> audio, b
         return;
     }
     job->result_body = json_string("abc", abc);
+    job->result_mime = "application/json";
+    job->status.store(JobStatus::DONE);
+}
+
+// Tokenize worker: the uploaded recording becomes its semantic codes, the
+// stream the semantic_tokens field of a request renders again.
+static void run_tokenize(std::shared_ptr<Job> job, std::vector<float> audio) {
+    active_job_set(job);
+    fprintf(stderr, "[Server] Tokenize job %s: %.1f s of audio\n", job->id.c_str(),
+            (double) audio.size() / MERT_SAMPLE_RATE);
+    std::vector<int> codes;
+    std::string      error;
+    bool             ok = pipeline_tokenize(&g_pipeline, audio.data(), (int) audio.size(), &codes, &error);
+    active_job_set(nullptr);
+    if (!ok) {
+        fprintf(stderr, "[Server] Tokenize job %s failed: %s\n", job->id.c_str(), error.c_str());
+        job->status.store(job->cancel.load() ? JobStatus::CANCELLED : JobStatus::FAILED);
+        return;
+    }
+    job->result_body = json_string("codes", pipeline_format_tokens(codes));
     job->result_mime = "application/json";
     job->status.store(JobStatus::DONE);
 }
@@ -682,7 +704,8 @@ static void print_usage(const char * prog) {
             "  --vae <gguf>           VAE GGUF\n"
             "\n"
             "Optional:\n"
-            "  --transcriber <gguf>   SheetSage2 GGUF, enables /transcribe\n"
+            "  --transcriber <gguf>   SheetSage2 GGUF, MERT beside it, enables /transcribe\n"
+            "  --tokenizer <gguf>     Audio tokenizer GGUF, MERT beside it, enables /tokenize\n"
             "  --adapters <dir>       Adapter directory, requests name its entries\n"
             "  --companion <file>     Decoder adapter merged at scale 1 under every render,\n"
             "                         before the request's adapters\n"
@@ -722,6 +745,8 @@ int main(int argc, char ** argv) {
             g_adapters_dir = argv[++i];
         } else if (!strcmp(argv[i], "--companion") && !last) {
             g_companion_path = argv[++i];
+        } else if (!strcmp(argv[i], "--tokenizer") && !last) {
+            g_tokenizer_path = argv[++i];
         } else if (!strcmp(argv[i], "--host") && !last) {
             host = argv[++i];
         } else if (!strcmp(argv[i], "--port") && !last) {
@@ -772,6 +797,7 @@ int main(int argc, char ** argv) {
     g_pipeline.transcriber_path = g_transcriber_path;
     g_pipeline.adapters_dir     = g_adapters_dir;
     g_pipeline.companion_path   = g_companion_path;
+    g_pipeline.tokenizer_path   = g_tokenizer_path;
     if (!pipeline_configure(&g_pipeline, g_model_path.c_str(), g_vae_path.c_str(), params)) {
         store_free(g_pipeline.store);
         return 1;
@@ -804,7 +830,7 @@ int main(int argc, char ** argv) {
     });
 
     svr.Get("/props", handle_props);
-    svr.Post("/tokenize", handle_tokenize);
+    svr.Post("/tokenize-text", handle_tokenize);
 
     svr.Get("/logs", handle_logs);
 
@@ -833,13 +859,37 @@ int main(int argc, char ** argv) {
             int                 T = 0, sr = 0;
             float *             planar = audio_read_buf((const uint8_t *) file.data(), file.size(), &T, &sr);
             std::vector<float>  audio;
-            if (!planar || !ss2_mono_24k(planar, T, sr, &audio)) {
+            if (!planar || !mert_mono_24k(planar, T, sr, &audio)) {
                 res.status = 400;
                 res.set_content(json_string("error", "cannot decode audio"), "application/json");
                 return;
             }
             auto job = job_create();
             work_push([job, audio, melody_only] { run_transcribe(job, audio, melody_only); });
+            res.set_content(json_string("id", job->id), "application/json");
+        });
+    }
+
+    // POST /tokenize, multipart/form-data: an "audio" part (WAV or MP3). The
+    // route is served when an audio tokenizer is given.
+    if (!g_tokenizer_path.empty()) {
+        svr.Post("/tokenize", [](const httplib::Request & req, httplib::Response & res) {
+            if (!req.is_multipart_form_data() || !req.form.has_file("audio")) {
+                res.status = 400;
+                res.set_content(json_string("error", "multipart audio part required"), "application/json");
+                return;
+            }
+            const std::string & file = req.form.get_file("audio").content;
+            int                 T = 0, sr = 0;
+            float *             planar = audio_read_buf((const uint8_t *) file.data(), file.size(), &T, &sr);
+            std::vector<float>  audio;
+            if (!planar || !mert_mono_24k(planar, T, sr, &audio)) {
+                res.status = 400;
+                res.set_content(json_string("error", "cannot decode audio"), "application/json");
+                return;
+            }
+            auto job = job_create();
+            work_push([job, audio] { run_tokenize(job, audio); });
             res.set_content(json_string("id", job->id), "application/json");
         });
     }

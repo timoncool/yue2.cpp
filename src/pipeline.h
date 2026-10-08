@@ -13,7 +13,9 @@
 // left complete, end token included, so a generated song that fits one
 // chunk never prefills, and the cache outlives both halves. It lives for
 // one generate under the strict policy, so the GPU is empty between
-// requests, and stays under --keep-loaded.
+// requests, and stays under --keep-loaded. The adapters of a request merge
+// into the halves at load, a half under another adapter list being another
+// module of the store.
 
 #include "generate.h"
 #include "model-store.h"
@@ -39,14 +41,14 @@
 // resident; max_seq and max_batch size the cache, which the pipeline owns
 // and never evicts.
 struct Yue2PipelineParams {
-    int  max_seq    = 0;              // 0 = model context, the whole 24576
-    int  max_batch  = 1;              // song batch limit, one KV set per song, two under guidance
-    bool no_fa      = false;          // disable flash attention
-    bool clamp_fp16 = false;          // clamp hidden states on sub-Ampere CUDA
-    int  vae_core   = 512;            // VAE tile core frames
-    int  vae_halo   = 16;             // VAE tile halo frames
+    int  max_seq    = 0;                  // 0 = model context, the whole 24576
+    int  max_batch  = 1;                  // song batch limit, one KV set per song, two under guidance
+    bool no_fa      = false;              // disable flash attention
+    bool clamp_fp16 = false;              // clamp hidden states on sub-Ampere CUDA
+    int  vae_core   = 512;                // VAE tile core frames
+    int  vae_halo   = 16;                 // VAE tile halo frames
 
-    const char * dump_dir = nullptr;  // probe dumps of the first track for the cossim harness
+    const char * dump_dir     = nullptr;  // probe dumps of the first track for the cossim harness
 };
 
 struct Yue2Pipeline {
@@ -54,6 +56,7 @@ struct Yue2Pipeline {
     std::string        model_path;        // the backbone GGUF, both halves and the tokenizer
     std::string        vae_path;
     std::string        transcriber_path;  // the SheetSage2 GGUF, empty without one
+    std::string        tokenizer_path;    // the audio tokenizer GGUF, empty without one
     std::string        adapters_dir;      // where request adapter names resolve, empty without one
     std::string        companion_path;    // decoder adapter merged at scale 1 under every NAR load, empty without one
     Yue2PipelineParams params;
@@ -232,12 +235,21 @@ static Yue2NAR * require_nar(Yue2Pipeline * p) {
 }
 
 static VAEGGML * require_vae(Yue2Pipeline * p) {
-    ModelKey k = { MODEL_VAE, p->vae_path };
+    ModelKey k = { MODEL_VAE, p->vae_path, {} };
     return store_require_vae(p->store, k);
 }
 
+static AudioTokenizer * require_atok(Yue2Pipeline * p) {
+    ModelKey         k = { MODEL_ATOK, p->tokenizer_path, {} };
+    AudioTokenizer * m = store_require_atok(p->store, k);
+    if (m) {
+        m->use_flash_attn = m->use_flash_attn && !p->params.no_fa;
+    }
+    return m;
+}
+
 static SheetSage2 * require_ss2(Yue2Pipeline * p) {
-    ModelKey     k = { MODEL_SS2, p->transcriber_path };
+    ModelKey     k = { MODEL_SS2, p->transcriber_path, {} };
     SheetSage2 * m = store_require_ss2(p->store, k);
     if (m) {
         m->use_flash_attn = m->use_flash_attn && !p->params.no_fa;
@@ -269,6 +281,26 @@ static bool pipeline_transcribe(Yue2Pipeline * p,
 static void pipeline_kv_capacity(Yue2Pipeline * p, int need) {
     int padded = (int) GGML_PAD(need, 256);
     qw3lm_kv_capacity(&p->kv, padded < p->context ? padded : p->context);
+}
+
+// A recording to its semantic codes, the stream a replay renders. The
+// tokenizer holds the GPU for the call and steps aside after it.
+static bool pipeline_tokenize(Yue2Pipeline *     p,
+                              const float *      audio,
+                              int                n_samples,
+                              std::vector<int> * codes,
+                              std::string *      error) {
+    AudioTokenizer * m = require_atok(p);
+    if (!m) {
+        *error = "audio tokenizer unavailable";
+        return false;
+    }
+    ModelHandle hold(p->store, m);
+    if (!atok_tokenize(m, audio, n_samples, codes, &p->dumper)) {
+        *error = "tokenization failed";
+        return false;
+    }
+    return true;
 }
 
 // The cache of one generate: the stages grow it to the sets they need, a
@@ -390,6 +422,12 @@ static bool pipeline_generate(Yue2Pipeline *          p,
     const int B = replay || resume ? 1 : r.lm_batch_size;
     const int M = r.synth_batch_size;
 
+    // A supplied stream with no score renders without one, whatever the
+    // mode: a score planned now is not the one the codes follow
+    if (replay && r.abc.empty()) {
+        cot = YUE2_COT_OFF;
+    }
+
     // Score per song: supplied by the caller, planned by the model, or absent
     std::vector<std::vector<int>> abc_ids(B);
     std::vector<std::string>      scores(B);
@@ -430,7 +468,8 @@ static bool pipeline_generate(Yue2Pipeline *          p,
     for (int i = 0; i < B; i++) {
         prefixes[i] = yue2_build_prompt_ids(encode, cot, r.style, r.lyrics, has_score ? &abc_ids[i] : nullptr);
     }
-    fprintf(stderr, "[Prompt] cot=%s, songs=%d, variations=%d, %zu tracks\n", r.cot.c_str(), B, M, (size_t) B * M);
+    fprintf(stderr, "[Prompt] cot=%s, songs=%d, variations=%d, %zu tracks\n", has_score ? r.cot.c_str() : "off", B, M,
+            (size_t) B * M);
 
     float                         guidance = r.cfg_scale < 0.0f ? yue2_default_guidance(cot) : r.cfg_scale;
     std::vector<std::vector<int>> negatives;
@@ -637,7 +676,7 @@ static bool pipeline_generate(Yue2Pipeline *          p,
             // sequence the latent block attends to, then the solver probes
             const DebugDumper * dbg = i == 0 && start == 0 ? &p->dumper : &quiet;
             if (dbg->enabled) {
-                std::vector<float> ids(sequence.begin(), sequence.end());
+                std::vector<float> ids = debug_ids(sequence);
                 debug_dump_1d(dbg, "ar_ids", ids.data(), (int) ids.size());
             }
 
