@@ -30,6 +30,7 @@ void request_init(Yue2Request * r) {
     r->peak_clip        = 10;
     r->cfg_scale        = -1.0f;
     r->semantic_tokens  = "";
+    r->continue_semantic_tokens = false;
 
     r->abc_sampling      = YUE2_ABC_SAMPLING;
     r->semantic_sampling = YUE2_SEMANTIC_SAMPLING;
@@ -218,6 +219,13 @@ static bool request_parse_obj(yyjson_val * obj, Yue2Request * r) {
     parse_sampling(obj, "semantic_sampling", &r->semantic_sampling);
     if ((v = yyjson_obj_get(obj, "semantic_tokens")) && yyjson_is_str(v)) {
         r->semantic_tokens = yy_str(v);
+    }
+    if ((v = yyjson_obj_get(obj, "continue_semantic_tokens")) && !yyjson_is_null(v)) {
+        if (!yyjson_is_bool(v)) {
+            fprintf(stderr, "[Request] ERROR: continue_semantic_tokens must be a boolean\n");
+            return false;
+        }
+        r->continue_semantic_tokens = yyjson_get_bool(v);
     }
     if ((v = yyjson_obj_get(obj, "cfg_scale")) && yyjson_is_num(v)) {
         r->cfg_scale = (float) yyjson_get_num(v);

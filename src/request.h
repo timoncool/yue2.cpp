@@ -87,6 +87,12 @@ struct Yue2Request {
     // single pass instead of the whole token loop.
     std::string semantic_tokens;  // ""
 
+    // with semantic_tokens: compose on after them instead of rendering them
+    // alone. The stream is a prefix of the song, prefilled under the same
+    // prompt and score; sampling picks up at its frame count and runs to the
+    // requested length. One song.
+    bool continue_semantic_tokens;  // false
+
     // classifier free guidance on the semantic stage. Negative applies the
     // protocol default, which is 1.01 in off mode and 1.0 otherwise, and a
     // scale of exactly 1.0 keeps a single branch.

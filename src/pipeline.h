@@ -380,12 +380,14 @@ static bool pipeline_generate(Yue2Pipeline *          p,
         return bpe_encode(tok, text);
     };
 
-    // A supplied stream is one song, the batch counter has nothing to draw
-    bool replay = !r.semantic_tokens.empty();
-    if (replay && r.lm_batch_size > 1) {
-        fprintf(stderr, "[Pipeline] Replay: lm_batch_size ignored\n");
+    // A supplied stream is one song, the batch counter has nothing to draw:
+    // rendered as it is, or carried on from where it stops
+    bool resume = !r.semantic_tokens.empty() && r.continue_semantic_tokens;
+    bool replay = !r.semantic_tokens.empty() && !resume;
+    if ((replay || resume) && r.lm_batch_size > 1) {
+        fprintf(stderr, "[Pipeline] %s: lm_batch_size ignored\n", resume ? "Continue" : "Replay");
     }
-    const int B = replay ? 1 : r.lm_batch_size;
+    const int B = replay || resume ? 1 : r.lm_batch_size;
     const int M = r.synth_batch_size;
 
     // Score per song: supplied by the caller, planned by the model, or absent
@@ -440,6 +442,23 @@ static bool pipeline_generate(Yue2Pipeline *          p,
     }
 
     std::vector<Yue2Generation> codes(B);
+    std::vector<int>            carried;
+    if (resume) {
+        std::vector<int> values;
+        if (!pipeline_parse_tokens(r.semantic_tokens, &values)) {
+            return false;
+        }
+        if (has_score && r.abc.empty()) {
+            fprintf(stderr, "[Pipeline] FATAL: continuing a song needs the score it was sung from\n");
+            return false;
+        }
+        carried.reserve(values.size());
+        for (int value : values) {
+            carried.push_back(value + YUE2_CODEC_OFFSET);
+        }
+        fprintf(stderr, "[Pipeline] Continue: %zu frames carried in (%.1f s)\n", carried.size(),
+                (double) carried.size() / (double) YUE2_FRAME_RATE);
+    }
     if (replay) {
         std::vector<int> values;
         if (!pipeline_parse_tokens(r.semantic_tokens, &values)) {
@@ -463,6 +482,11 @@ static bool pipeline_generate(Yue2Pipeline *          p,
             if (semantic.min_tokens > semantic.max_tokens) {
                 semantic.min_tokens = semantic.max_tokens;
             }
+        }
+        if (resume && (int) carried.size() >= semantic.max_tokens) {
+            fprintf(stderr, "[Pipeline] FATAL: the song already has %zu frames, the length asked for holds %d\n",
+                    carried.size(), semantic.max_tokens);
+            return false;
         }
         // The sets outlive the stage: a song that fits takes its acoustic
         // chunk whole, the prefix, its frames twice over and three markers
@@ -490,8 +514,18 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                 return false;
             }
         }
-        if (!yue2_generate(lm, &p->kv, prefixes, negatives, guidance, semantic, r.lm_seed, YUE2_PHASE_SEMANTIC, &codes,
-                           cancelled, cancel_data, r.lyric_schedule.on ? &lyric_mask : nullptr)) {
+        // a carried stream is prefilled behind the prompt on every set
+        std::vector<std::vector<int>> ar_prefixes = prefixes;
+        std::vector<std::vector<int>> ar_negatives = negatives;
+        for (auto & prefix : ar_prefixes) {
+            prefix.insert(prefix.end(), carried.begin(), carried.end());
+        }
+        for (auto & negative : ar_negatives) {
+            negative.insert(negative.end(), carried.begin(), carried.end());
+        }
+        if (!yue2_generate(lm, &p->kv, ar_prefixes, ar_negatives, guidance, semantic, r.lm_seed, YUE2_PHASE_SEMANTIC,
+                           &codes, cancelled, cancel_data, r.lyric_schedule.on ? &lyric_mask : nullptr,
+                           resume ? &carried : nullptr)) {
             return false;
         }
     }

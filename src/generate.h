@@ -98,10 +98,13 @@ static bool yue2_generate(Qwen3LM *                             lm,
                           std::vector<Yue2Generation> *         out,
                           bool (*cancelled)(void *) = nullptr,
                           void *                 cancel_data = nullptr,
-                          const Yue2PromptMask * mask        = nullptr) {
+                          const Yue2PromptMask * mask        = nullptr,
+                          const std::vector<int> * carried   = nullptr) {
     const int B       = (int) prefixes.size();
     const int context = kv->cfg.max_seq_len;
     bool      guided  = cfg_scale != 1.0f;
+    // a stream carried in at the end of every prefix: the draw goes on from it
+    const int carried_n = carried ? (int) carried->size() : 0;
     if (guided && (int) negatives.size() != B) {
         fprintf(stderr, "[AR] FATAL: guidance %.3f needs an unconditional prefix per sequence\n", (double) cfg_scale);
         return false;
@@ -109,7 +112,7 @@ static bool yue2_generate(Qwen3LM *                             lm,
     // Every set holds its prefix, the budget and the end token
     for (int i = 0; i < B; i++) {
         size_t longest = guided && negatives[i].size() > prefixes[i].size() ? negatives[i].size() : prefixes[i].size();
-        if ((int) longest + s.max_tokens + 1 > context) {
+        if ((int) longest - carried_n + s.max_tokens + 1 > context) {
             fprintf(stderr, "[AR] FATAL: prefix %zu + budget %d + end exceeds context %d\n", longest, s.max_tokens,
                     context);
             return false;
@@ -148,7 +151,7 @@ static bool yue2_generate(Qwen3LM *                             lm,
     fprintf(stderr, "[AR] %s prefill: %.0f ms, CFG=%.2f, top_k=%d, budget=%d, songs=%d, batch=%d\n", label,
             prefill_timer.ms(), (double) cfg_scale, s.top_k, s.max_tokens, B, N);
 
-    out->assign((size_t) B, { {}, true });
+    out->assign((size_t) B, { carried ? *carried : std::vector<int>(), true });
 
     // Forwards a sequence still owes once it stops drawing: one for its end
     // token, two when the budget cut it on a content token. Negative while
@@ -157,7 +160,7 @@ static bool yue2_generate(Qwen3LM *                             lm,
     std::vector<int>           tokens(N);
     std::vector<float>         mixed(guided ? (size_t) rows : 0);
     std::vector<Yue2Candidate> candidates;
-    int                        step = 0;
+    int                        step = carried_n;
     for (;; step++) {
         if (cancelled && cancelled(cancel_data)) {
             fprintf(stderr, "[AR] Cancelled at step %d\n", step);
