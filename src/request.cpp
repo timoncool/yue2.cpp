@@ -29,6 +29,7 @@ void request_init(Yue2Request * r) {
     r->synth_batch_size = 1;
     r->peak_clip        = 10;
     r->cfg_scale        = -1.0f;
+    r->companion_scale  = 1.0f;
     r->semantic_tokens  = "";
     r->continue_semantic_tokens = false;
 
@@ -230,6 +231,13 @@ static bool request_parse_obj(yyjson_val * obj, Yue2Request * r) {
     if ((v = yyjson_obj_get(obj, "cfg_scale")) && yyjson_is_num(v)) {
         r->cfg_scale = (float) yyjson_get_num(v);
     }
+    if ((v = yyjson_obj_get(obj, "companion_scale"))) {
+        if (!yyjson_is_num(v) || yyjson_get_num(v) < 0.0 || yyjson_get_num(v) > 2.0) {
+            fprintf(stderr, "[Request] ERROR: companion_scale must be a number in [0,2]\n");
+            return false;
+        }
+        r->companion_scale = (float) yyjson_get_num(v);
+    }
     if ((v = yyjson_obj_get(obj, "output_format")) && yyjson_is_str(v)) {
         r->output_format = yy_str(v);
     }
@@ -366,6 +374,9 @@ std::string request_to_json(const Yue2Request * r, bool sparse) {
     add_sampling(doc, root, "semantic_sampling", r->semantic_sampling, d.semantic_sampling, sparse);
     if (!sparse || r->semantic_tokens != d.semantic_tokens) {
         yyjson_mut_obj_add_strncpy(doc, root, "semantic_tokens", r->semantic_tokens.c_str(), r->semantic_tokens.size());
+    }
+    if (!sparse || r->companion_scale != d.companion_scale) {
+        yyjson_mut_obj_add_real(doc, root, "companion_scale", r->companion_scale);
     }
     if (!sparse || r->cfg_scale != d.cfg_scale) {
         yyjson_mut_obj_add_real(doc, root, "cfg_scale", r->cfg_scale);

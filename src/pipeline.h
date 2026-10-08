@@ -169,8 +169,8 @@ static bool pipeline_resolve_adapters(const Yue2Pipeline *       p,
                                       std::string *              error) {
     ar->clear();
     nar->clear();
-    if (!p->companion_path.empty()) {
-        nar->push_back({ p->companion_path, 1.0f });
+    if (!p->companion_path.empty() && r.companion_scale != 0.0f) {
+        nar->push_back({ p->companion_path, r.companion_scale });
     }
     for (const auto & a : r.adapters) {
         std::string path;

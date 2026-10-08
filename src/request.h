@@ -98,6 +98,10 @@ struct Yue2Request {
     // scale of exactly 1.0 keeps a single branch.
     float cfg_scale;  // -1
 
+    // strength of the server's decoder companion under this render: 1 keeps
+    // the sound it was started with, 0 decodes with the checkpoint alone
+    float companion_scale;  // 1
+
     // output normalization percentile control, the peak being the
     // 1 - peak_clip / 1e6 percentile of the absolute signal
     int peak_clip;  // 10
