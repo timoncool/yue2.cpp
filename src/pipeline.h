@@ -536,6 +536,15 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                 longest = (int) negatives[i].size();
             }
             int semantic_need = longest + semantic.max_tokens + 1;
+            if (semantic_need > p->context) {
+                int room = p->context - longest - 1;
+                fprintf(stderr,
+                        "[Pipeline] FATAL: the prompt and the score take %d of the model's %d tokens, so a song can "
+                        "last %.0f s and %.0f s were asked for\n",
+                        longest, p->context, room > 0 ? room / (double) YUE2_FRAME_RATE : 0.0,
+                        semantic.max_tokens / (double) YUE2_FRAME_RATE);
+                return false;
+            }
             int acoustic_need = (int) prefixes[i].size() + 2 * semantic.max_tokens + 3;
             need              = std::max(need, std::max(semantic_need, acoustic_need));
         }
