@@ -37,6 +37,7 @@ void request_init(Yue2Request * r) {
     r->output_format = OUTPUT_FORMAT_MP3;
     r->mp3_bitrate   = 128;
     r->adapters.clear();
+    r->lyric_schedule = Yue2LyricSchedule();
 }
 
 static inline std::string yy_str(yyjson_val * v) {
@@ -111,6 +112,70 @@ static void add_sampling(yyjson_mut_doc *     doc,
     if (any) {
         yyjson_mut_obj_add_val(doc, root, key, node);
     }
+}
+
+// "lyric_schedule": {"mode": "bias"|"mask", "bias": <0 for bias, "lead_sec"?: s,
+// "behind"?: n, "sections": [{"start_sec": s, "lyric": [c0, c1]}]} in score order
+static bool request_parse_schedule(yyjson_val * ls, Yue2LyricSchedule * sc) {
+    auto fail = [](const char * why) {
+        fprintf(stderr, "[Request] ERROR: lyric_schedule %s\n", why);
+        return false;
+    };
+    if (!yyjson_is_obj(ls)) {
+        return fail("must be an object");
+    }
+    yyjson_val * mode     = yyjson_obj_get(ls, "mode");
+    yyjson_val * sections = yyjson_obj_get(ls, "sections");
+    if (!yyjson_is_str(mode) || (yy_str(mode) != "bias" && yy_str(mode) != "mask")) {
+        return fail("mode must be \"bias\" or \"mask\"");
+    }
+    if (!yyjson_is_arr(sections) || yyjson_arr_size(sections) < 1 || yyjson_arr_size(sections) > 256) {
+        return fail("sections must hold 1 to 256 entries");
+    }
+    yyjson_val * v;
+    if (yy_str(mode) == "bias") {
+        v = yyjson_obj_get(ls, "bias");
+        if (!yyjson_is_num(v) || !(yyjson_get_num(v) < 0.0 && yyjson_get_num(v) >= -60.0)) {
+            return fail("bias must be in [-60, 0) in bias mode");
+        }
+        sc->bias = (float) yyjson_get_num(v);
+    }
+    if ((v = yyjson_obj_get(ls, "lead_sec")) && !yyjson_is_null(v)) {
+        if (!yyjson_is_num(v) || !(yyjson_get_num(v) >= 0.0 && yyjson_get_num(v) <= 30.0)) {
+            return fail("lead_sec must be in [0, 30]");
+        }
+        sc->lead_sec = yyjson_get_num(v);
+    }
+    if ((v = yyjson_obj_get(ls, "behind")) && !yyjson_is_null(v)) {
+        if (!yyjson_is_int(v) || yyjson_get_sint(v) < -1 || yyjson_get_sint(v) > 256) {
+            return fail("behind must be an integer in [-1, 256]");
+        }
+        sc->behind = (int) yyjson_get_sint(v);
+    }
+    size_t       idx, max;
+    yyjson_val * e;
+    yyjson_arr_foreach(sections, idx, max, e) {
+        yyjson_val * start = yyjson_is_obj(e) ? yyjson_obj_get(e, "start_sec") : nullptr;
+        yyjson_val * lyric = yyjson_is_obj(e) ? yyjson_obj_get(e, "lyric") : nullptr;
+        if (!yyjson_is_num(start) || !std::isfinite(yyjson_get_num(start)) || yyjson_get_num(start) < 0.0 ||
+            !yyjson_is_arr(lyric) || yyjson_arr_size(lyric) != 2 || !yyjson_is_int(yyjson_arr_get(lyric, 0)) ||
+            !yyjson_is_int(yyjson_arr_get(lyric, 1))) {
+            return fail("sections need start_sec >= 0 and lyric [c0, c1]");
+        }
+        Yue2LyricSection section;
+        section.start_sec = yyjson_get_num(start);
+        section.lyric_c0  = yyjson_get_sint(yyjson_arr_get(lyric, 0));
+        section.lyric_c1  = yyjson_get_sint(yyjson_arr_get(lyric, 1));
+        if (section.lyric_c0 < 0 || section.lyric_c1 <= section.lyric_c0) {
+            return fail("a section's lyric span needs 0 <= c0 < c1");
+        }
+        if (!sc->sections.empty() && section.start_sec < sc->sections.back().start_sec) {
+            return fail("sections must be in score order");
+        }
+        sc->sections.push_back(section);
+    }
+    sc->on = true;
+    return true;
 }
 
 static bool request_parse_obj(yyjson_val * obj, Yue2Request * r) {
@@ -199,6 +264,11 @@ static bool request_parse_obj(yyjson_val * obj, Yue2Request * r) {
             a.scale = (float) yyjson_get_num(v);
         }
         r->adapters.push_back(a);
+    }
+    if ((v = yyjson_obj_get(obj, "lyric_schedule")) && !yyjson_is_null(v)) {
+        if (!request_parse_schedule(v, &r->lyric_schedule)) {
+            return false;
+        }
     }
     return true;
 }

@@ -64,6 +64,14 @@ struct Qw3lmGraphCache {
 // KV cache of the backbone, owned apart from the weights: the AR fills it,
 // the NAR reads it, and the weights of either half may leave VRAM in
 // between while the cache stays.
+// An additive attention bias on rows [a, b) of one set's cache, laid on top of
+// the causal mask by the batched decode.
+struct Qw3lmMaskSpan {
+    int64_t a    = 0;
+    int64_t b    = 0;
+    float   bias = 0.0f;
+};
+
 struct Qw3lmKvCache {
     Qwen3LMConfig         cfg;  // shape source: layers, heads, max_seq_len
     ggml_backend_t        backend;
@@ -80,6 +88,9 @@ struct Qw3lmKvCache {
     // Allocation number, unique across caches: a freed cache can come back
     // at the same addresses with another shape
     uint64_t              epoch;
+    // Per set, rewritten by the caller before each batched decode step;
+    // empty leaves the plain causal mask
+    std::vector<std::vector<Qw3lmMaskSpan>> prompt_bias;
 };
 
 inline uint64_t g_qw3lm_kv_epoch = 0;
@@ -907,6 +918,15 @@ static void qw3lm_forward_batch(Qwen3LM *      m,
         for (int j = 0; j < n_kv_pad; j++) {
             m->batch_graph.mask_data[(size_t) i * (size_t) n_kv_pad + (size_t) j] =
                 ggml_fp32_to_fp16((j < kvl) ? 0.0f : -INFINITY);
+        }
+        if ((size_t) kv_sets[i] < kv->prompt_bias.size()) {
+            for (const Qw3lmMaskSpan & span : kv->prompt_bias[(size_t) kv_sets[i]]) {
+                const int64_t lo = span.a > 0 ? span.a : 0;
+                const int64_t hi = span.b < kvl ? span.b : kvl;
+                for (int64_t j = lo; j < hi; j++) {
+                    m->batch_graph.mask_data[(size_t) i * (size_t) n_kv_pad + (size_t) j] = ggml_fp32_to_fp16(span.bias);
+                }
+            }
         }
     }
     ggml_backend_tensor_set(attn_mask, m->batch_graph.mask_data.data(), 0,

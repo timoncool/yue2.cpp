@@ -22,6 +22,27 @@ struct Yue2RequestAdapter {
     float       nar_scale = NAN;
 };
 
+// One sung section of the lyrics and the moment the score reaches it: its first
+// Vocal note on the score clock, and its codepoints in the request lyrics.
+struct Yue2LyricSection {
+    double  start_sec = 0.0;
+    int64_t lyric_c0  = 0;
+    int64_t lyric_c1  = 0;
+};
+
+// Lyric schedule tied to the score clock (HOT-Step's C6): while the semantic
+// stage composes the frame at t, a section whose first note lies more than
+// lead_sec after t is kept out of sight by an additive attention bias on its
+// prompt rows (-inf hides it outright). behind >= 0 also hides sections more
+// than that many before the current one.
+struct Yue2LyricSchedule {
+    bool                          on       = false;
+    float                         bias     = -INFINITY;
+    double                        lead_sec = 0.0;
+    int                           behind   = -1;
+    std::vector<Yue2LyricSection> sections;
+};
+
 struct Yue2Request {
     // text content
     std::string style;   // ""
@@ -85,6 +106,10 @@ struct Yue2Request {
     // adapters merged into the backbone for this request, applied in order.
     // "adapter" and "adapter_scale" are read too, as a one entry list.
     std::vector<Yue2RequestAdapter> adapters;  // []
+
+    // sections of the lyrics revealed as the score reaches them; needs a
+    // supplied score, one prompt for every song and no guidance
+    Yue2LyricSchedule lyric_schedule;  // off
 };
 
 // fills every field with its default
