@@ -704,6 +704,13 @@ spelled, once the list is used no further `%` line may start, and the end
 token is held back until every section has begun and the last has 4 chords.
 Out of bounds is a 400 from the server and a FATAL from the CLI.
 
+A planned score nothing can be sung from stops the request before the
+semantic stage (`src/score-check.h`): a header without a well-formed `M:`,
+`L:` or `K:`, no voice with bars, or colons inside the note runs outside
+chord symbols, inline fields and repeat bars. The log shows the start of the
+score in printable ASCII and a FATAL naming what is wrong; `yue-plan` only
+warns.
+
 ## yue-plan reference
 
 Runs the first autoregressive stage alone and writes the composition the

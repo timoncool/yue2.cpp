@@ -41,3 +41,7 @@ link_ggml_backends(test-tokenizer)
 # test-harmony: chord variety and section order of the planned score, pure CPU, no ggml.
 add_executable(test-harmony test-harmony.cpp)
 target_include_directories(test-harmony PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# test-score-check: a planned score nothing can be sung from, pure CPU, no ggml.
+add_executable(test-score-check test-score-check.cpp)
+target_include_directories(test-score-check PRIVATE ${CMAKE_SOURCE_DIR}/src)

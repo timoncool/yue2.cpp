@@ -21,6 +21,7 @@
 #include "model-store.h"
 #include "nar.h"
 #include "request.h"
+#include "score-check.h"
 #include "timer.h"
 #include "torch-cpu-rng.h"
 #include "vae.h"
@@ -473,6 +474,18 @@ static bool pipeline_generate(Yue2Pipeline *          p,
             abc_ids[i]   = plans[i].tokens;
             scores[i]    = bpe_decode(tok, abc_ids[i]);
             truncated[i] = plans[i].truncated;
+            // a plan nothing can be sung from stops the song before the long stage
+            std::string problem = yue2_score_problem(scores[i]);
+            if (!problem.empty()) {
+                fprintf(stderr, "[Pipeline] score of song %d as written:\n%s\n", i + 1,
+                        yue2_score_excerpt(scores[i], 800).c_str());
+                fprintf(stderr, "[Pipeline] FATAL: the score the model wrote for song %d cannot be sung: %s. %s\n",
+                        i + 1, problem.c_str(),
+                        r.adapters.empty() ? "Draw another seed."
+                                           : "Adapters past their limits on the score half do this: lower their "
+                                             "strengths or draw another seed.");
+                return false;
+            }
         }
     }
 
