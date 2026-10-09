@@ -22,6 +22,7 @@
 #pragma once
 
 #include "debug.h"
+#include "flow-solver.h"
 #include "qwen3-lm.h"
 #include "timer.h"
 
@@ -35,6 +36,10 @@
 #define YUE2_NAR_GRAPH_NODES 8192
 #define YUE2_TIME_EMBED_DIM  256
 #define YUE2_NAR_MASK_PAD    64
+// The attention's keys are padded to a whole number of the CUDA flash
+// attention kernels' KV tile and the padding masked out: with an unaligned
+// key count the kernels can read past the last key.
+#define YUE2_NAR_KV_PAD      256
 
 // Named probes of the velocity graph, read by the cossim harness: the key
 // depths of the latent block and the layer 0 attention output
@@ -70,7 +75,8 @@ struct Yue2NAR {
     struct ggml_tensor * in_time;     // [256]
     struct ggml_tensor * in_pos_emb;  // [H, N_nar]
     struct ggml_tensor * in_pos;      // [N_nar] i32
-    struct ggml_tensor * in_mask;     // [ar_len + N_nar, pad(N_nar)] f16, all zero
+    struct ggml_tensor * in_mask;     // [pad(ar_len + N_nar), pad(N_nar)] f16, -inf on the padded keys
+    struct ggml_tensor * in_kv_zero;  // [head_dim, padded keys, n_kv_heads, 1] f16 zeros, null without padding
     struct ggml_tensor * out_v;       // [latent_dim, T_lat, M]
     int                  graph_T;     // cached T_lat (0 = no cache)
     int                  graph_M;     // cached variation count
@@ -238,7 +244,8 @@ static struct ggml_tensor * nar_build_attn(struct ggml_context * ctx,
                                            Qwen3Layer *          ly,
                                            struct ggml_tensor *  x,          // [H, N, M]
                                            struct ggml_tensor *  positions,  // [N]
-                                           struct ggml_tensor *  mask,       // [ar_len + N, pad(N)] f16, all zero
+                                           struct ggml_tensor *  mask,       // [pad(ar_len + N), pad(N)] f16
+                                           struct ggml_tensor *  kv_zero,    // zero keys up to the padded count, or null
                                            struct ggml_tensor *  cache_k,    // [D, max_seq, Nkv] f16
                                            struct ggml_tensor *  cache_v,
                                            int                   ar_len,
@@ -301,6 +308,14 @@ static struct ggml_tensor * nar_build_attn(struct ggml_context * ctx,
 
     struct ggml_tensor * k_full = ggml_concat(ctx, k_ar, k, 1);
     struct ggml_tensor * v_full = ggml_concat(ctx, v_ar, v, 1);
+    if (kv_zero) {
+        struct ggml_tensor * zero = kv_zero;
+        if (M > 1) {
+            zero = ggml_repeat(ctx, kv_zero, ggml_new_tensor_4d(ctx, GGML_TYPE_F16, D, kv_zero->ne[1], Nkv, M));
+        }
+        k_full = ggml_concat(ctx, k_full, zero, 1);
+        v_full = ggml_concat(ctx, v_full, zero, 1);
+    }
 
     float                scale = 1.0f / sqrtf((float) D);
     struct ggml_tensor * attn  = use_flash_attn ? ggml_flash_attn_ext(ctx, q, k_full, v_full, mask, scale, 0.0f, 0.0f) :
@@ -354,7 +369,14 @@ static bool nar_build_graph(Yue2NAR * n, const Qw3lmKvCache * kv, int T_lat, int
         n->in_pos_emb              = ggml_new_tensor_2d(n->input_ctx, GGML_TYPE_F32, H, N);
         n->in_pos                  = ggml_new_tensor_1d(n->input_ctx, GGML_TYPE_I32, N);
         int mask_rows              = (N + YUE2_NAR_MASK_PAD - 1) / YUE2_NAR_MASK_PAD * YUE2_NAR_MASK_PAD;
-        n->in_mask                 = ggml_new_tensor_2d(n->input_ctx, GGML_TYPE_F16, ar_len + N, mask_rows);
+        int keys                   = (ar_len + N + YUE2_NAR_KV_PAD - 1) / YUE2_NAR_KV_PAD * YUE2_NAR_KV_PAD;
+        n->in_mask                 = ggml_new_tensor_2d(n->input_ctx, GGML_TYPE_F16, keys, mask_rows);
+        n->in_kv_zero              = nullptr;
+        if (keys > ar_len + N) {
+            n->in_kv_zero = ggml_new_tensor_4d(n->input_ctx, GGML_TYPE_F16, c.head_dim, keys - ar_len - N, c.n_kv_heads, 1);
+            ggml_set_name(n->in_kv_zero, "nar_kv_zero");
+            ggml_set_input(n->in_kv_zero);
+        }
         ggml_set_name(n->in_pos_emb, "nar_pos_emb");
         ggml_set_input(n->in_pos_emb);
         ggml_set_name(n->in_pos, "nar_positions");
@@ -385,7 +407,7 @@ static bool nar_build_graph(Yue2NAR * n, const Qw3lmKvCache * kv, int T_lat, int
     for (int l = 0; l < c.n_layers; l++) {
         Qwen3Layer *         ly   = &n->layers[l];
         struct ggml_tensor * norm = qwen3_rms_norm(ctx, hidden, ly->input_layernorm, c.rms_norm_eps);
-        struct ggml_tensor * attn = nar_build_attn(ctx, c, ly, norm, n->in_pos, n->in_mask, kv->k[kv_set][l],
+        struct ggml_tensor * attn = nar_build_attn(ctx, c, ly, norm, n->in_pos, n->in_mask, n->in_kv_zero, kv->k[kv_set][l],
                                                    kv->v[kv_set][l], ar_len, N, M, n->use_flash_attn, n->clamp_fp16);
         if (l == 0) {
             ggml_set_name(attn, "layer0_sa_output");
@@ -437,9 +459,19 @@ static bool nar_build_graph(Yue2NAR * n, const Qw3lmKvCache * kv, int T_lat, int
         }
         ggml_backend_tensor_set(n->in_pos, n->scratch_pos.data(), 0, n->scratch_pos.size() * sizeof(int32_t));
 
-        // Every NAR query sees every key, so the additive mask is uniformly zero
-        std::vector<uint16_t> zeros((size_t) ggml_nelements(n->in_mask), 0);
-        ggml_backend_tensor_set(n->in_mask, zeros.data(), 0, zeros.size() * sizeof(uint16_t));
+        // Every NAR query sees every real key: zero, and -inf (f16 0xFC00) on the padding
+        const int64_t         keys = n->in_mask->ne[0];
+        std::vector<uint16_t> mask((size_t) ggml_nelements(n->in_mask), 0);
+        for (int64_t row = 0; row < n->in_mask->ne[1]; row++) {
+            for (int64_t key = ar_len + N; key < keys; key++) {
+                mask[(size_t) (row * keys + key)] = 0xFC00;
+            }
+        }
+        ggml_backend_tensor_set(n->in_mask, mask.data(), 0, mask.size() * sizeof(uint16_t));
+        if (n->in_kv_zero) {
+            std::vector<uint16_t> zeros((size_t) ggml_nelements(n->in_kv_zero), 0);
+            ggml_backend_tensor_set(n->in_kv_zero, zeros.data(), 0, zeros.size() * sizeof(uint16_t));
+        }
     }
     if (new_key) {
         fprintf(stderr, "[NAR] Graph: %d nodes, T_lat=%d, variations=%d, prefix=%d, set=%d\n", ggml_graph_n_nodes(gf),
@@ -530,49 +562,55 @@ static bool nar_solve(Yue2NAR *            n,
                       int                  steps,
                       const DebugDumper *  dbg,
                       bool (*cancelled)(void *) = nullptr,
-                      void * cancel_data        = nullptr) {
-    size_t             count = (size_t) n->latent_dim * T_lat * M;
-    std::vector<float> first(count), mid(count), second(count);
-    float              dt = 1.0f / (float) steps;
-    char               name[64];
+                      void *     cancel_data    = nullptr,
+                      Yue2Solver solver         = YUE2_SOLVER_MIDPOINT) {
+    size_t count = (size_t) n->latent_dim * T_lat * M;
+    char   name[64];
+    int    evaluations = 0;
+    int    current     = 0;
+    bool   opening     = true;
+    Timer  step_timer;
 
     debug_dump_2d(dbg, "noise", state, T_lat, n->latent_dim);
     Timer solve_timer;
-    for (int step = 0; step < steps; step++) {
-        Timer step_timer;
+    auto  velocity = [&](const float * x, float t, float * out) {
         if (cancelled && cancelled(cancel_data)) {
-            fprintf(stderr, "[NAR] Cancelled at step %d\n", step);
+            fprintf(stderr, "[NAR] Cancelled at step %d\n", current);
             return false;
         }
-        float t = 1.0f - (float) step * dt;
-        if (!nar_velocity(n, kv, state, T_lat, M, ar_len, kv_set, nar_logit_clamped(t), first.data())) {
+        if (!nar_velocity(n, kv, x, T_lat, M, ar_len, kv_set, nar_logit_clamped(t), out)) {
             return false;
         }
-        if (dbg->enabled && step == 0) {
+        if (dbg->enabled && evaluations == 0) {
             nar_dump_named(n, dbg);
         }
-        for (size_t i = 0; i < count; i++) {
-            mid[i] = state[i] - first[i] * (dt * 0.5f);
+        if (opening) {
+            snprintf(name, sizeof(name), "nar_step%d_first", current);
+            debug_dump_2d(dbg, name, out, T_lat, n->latent_dim);
+            opening = false;
         }
-        if (!nar_velocity(n, kv, mid.data(), T_lat, M, ar_len, kv_set, nar_logit_clamped(t - dt * 0.5f),
-                          second.data())) {
-            return false;
-        }
-        for (size_t i = 0; i < count; i++) {
-            state[i] -= second[i] * dt;
-        }
-        snprintf(name, sizeof(name), "nar_step%d_first", step);
-        debug_dump_2d(dbg, name, first.data(), T_lat, n->latent_dim);
+        evaluations++;
+        return true;
+    };
+    auto stepped = [&](int step, const float * used) {
         snprintf(name, sizeof(name), "nar_step%d_second", step);
-        debug_dump_2d(dbg, name, second.data(), T_lat, n->latent_dim);
+        debug_dump_2d(dbg, name, used, T_lat, n->latent_dim);
         snprintf(name, sizeof(name), "nar_step%d_xt", step);
         debug_dump_2d(dbg, name, state, T_lat, n->latent_dim);
         fprintf(stderr, "[NAR] Step %d/%d, %.0f ms\n", step + 1, steps, step_timer.ms());
+        current    = step + 1;
+        opening    = true;
+        step_timer = Timer();
+        return true;
+    };
+    if (!yue2_flow_solve(state, count, steps, solver, velocity, stepped)) {
+        return false;
     }
     debug_dump_2d(dbg, "nar_x0", state, T_lat, n->latent_dim);
 
-    fprintf(stderr, "[NAR] Solved: T_lat=%d, %d variations, %d steps, %.0f ms (%.1f ms/step)\n", T_lat, M, steps,
-            solve_timer.ms(), solve_timer.ms() / steps);
+    fprintf(stderr, "[NAR] Solved: T_lat=%d, %d variations, %d steps (%s, %d evaluations), %.0f ms (%.1f ms/step)\n",
+            T_lat, M, steps, solver == YUE2_SOLVER_AB2 ? "ab2" : "midpoint", evaluations, solve_timer.ms(),
+            solve_timer.ms() / steps);
     return true;
 }
 
