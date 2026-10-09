@@ -72,7 +72,11 @@ struct Yue2Request {
     // after rd().
     int64_t lm_seed;  // -1 = random
     int64_t seed;     // -1 = random
-    int     steps;    // 32, midpoint steps of the flow matching ODE
+    int     steps;    // 32, steps of the flow matching ODE
+
+    // the ODE solver: "midpoint" (2 evaluations a step) or "ab2" (one a step
+    // after the first, see flow-solver.h)
+    std::string solver;  // "midpoint"
 
     // batching: number of songs generated from this prompt. Song i draws
     // its tokens with lm_seed + i, consecutive seeds.

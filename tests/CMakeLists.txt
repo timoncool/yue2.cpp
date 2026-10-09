@@ -45,3 +45,7 @@ target_include_directories(test-harmony PRIVATE ${CMAKE_SOURCE_DIR}/src)
 # test-score-check: a planned score nothing can be sung from, pure CPU, no ggml.
 add_executable(test-score-check test-score-check.cpp)
 target_include_directories(test-score-check PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+# test-flow-solver: the flow matching steppers on analytic fields, pure CPU, no ggml.
+add_executable(test-flow-solver test-flow-solver.cpp)
+target_include_directories(test-flow-solver PRIVATE ${CMAKE_SOURCE_DIR}/src)

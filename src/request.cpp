@@ -25,6 +25,7 @@ void request_init(Yue2Request * r) {
     r->lm_seed          = -1;
     r->seed             = -1;
     r->steps            = 32;
+    r->solver           = "midpoint";
     r->lm_batch_size    = 1;
     r->synth_batch_size = 1;
     r->peak_clip        = 10;
@@ -289,6 +290,13 @@ static bool request_parse_obj(yyjson_val * obj, Yue2Request * r) {
     if ((v = yyjson_obj_get(obj, "semantic_tokens")) && yyjson_is_str(v)) {
         r->semantic_tokens = yy_str(v);
     }
+    if ((v = yyjson_obj_get(obj, "solver")) && !yyjson_is_null(v)) {
+        if (!yyjson_is_str(v)) {
+            fprintf(stderr, "[Request] ERROR: solver must be \"midpoint\" or \"ab2\"\n");
+            return false;
+        }
+        r->solver = yy_str(v);
+    }
     if ((v = yyjson_obj_get(obj, "abc_continue")) && !yyjson_is_null(v)) {
         if (!yyjson_is_bool(v)) {
             fprintf(stderr, "[Request] ERROR: abc_continue must be a boolean\n");
@@ -454,6 +462,9 @@ std::string request_to_json(const Yue2Request * r, bool sparse) {
     add_sampling(doc, root, "semantic_sampling", r->semantic_sampling, d.semantic_sampling, sparse);
     if (!sparse || r->semantic_tokens != d.semantic_tokens) {
         yyjson_mut_obj_add_strncpy(doc, root, "semantic_tokens", r->semantic_tokens.c_str(), r->semantic_tokens.size());
+    }
+    if (!sparse || r->solver != d.solver) {
+        yyjson_mut_obj_add_strncpy(doc, root, "solver", r->solver.c_str(), r->solver.size());
     }
     if (!sparse || r->abc_continue) {
         yyjson_mut_obj_add_bool(doc, root, "abc_continue", r->abc_continue);

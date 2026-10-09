@@ -400,6 +400,11 @@ static bool pipeline_generate(Yue2Pipeline *          p,
     if (!yue2_sampling_valid(r.abc_sampling, "abc") || !yue2_sampling_valid(r.semantic_sampling, "semantic")) {
         return false;
     }
+    Yue2Solver solver;
+    if (!yue2_solver_parse(r.solver, &solver)) {
+        fprintf(stderr, "[Pipeline] FATAL: solver must be \"midpoint\" or \"ab2\", not \"%s\"\n", r.solver.c_str());
+        return false;
+    }
     if (r.abc_continue && (r.abc.empty() || r.cot == "off")) {
         fprintf(stderr, "[Pipeline] FATAL: abc_continue takes the opening of a score in melody or full mode\n");
         return false;
@@ -737,7 +742,8 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                        (*songs)[(size_t) i * M + j].latents.data() + (size_t) start * YUE2_LATENT_DIM,
                        span * sizeof(float));
             }
-            if (!nar_solve(nar, &p->kv, block.data(), frames, M, ar_len, i, r.steps, dbg, cancelled, cancel_data)) {
+            if (!nar_solve(nar, &p->kv, block.data(), frames, M, ar_len, i, r.steps, dbg, cancelled, cancel_data,
+                           solver)) {
                 return false;
             }
             for (int j = 0; j < M; j++) {

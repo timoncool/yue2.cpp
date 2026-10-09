@@ -631,7 +631,16 @@ re-rendering the same codes under another noise. Both are resolved before
 the job starts and returned with the track, so a replay reproduces it.
 
 **`steps`** (int, default `32`)
-Midpoint steps of the flow matching ODE. Minimum 1.
+Steps of the flow matching ODE. Minimum 1.
+
+**`solver`** (string, default `"midpoint"`)
+The ODE solver (`src/flow-solver.h`). `"midpoint"` evaluates the network
+twice a step, as the reference renders. `"ab2"` is Adams-Bashforth of the
+second order: a midpoint first step, then one evaluation a step reusing the
+velocity before it, S + 1 evaluations for S steps instead of 2S (after
+Riff). Both converge at the second order; on a 122 s performance at 16 steps
+the acoustic stage took 3.3 s against 1.7 s and the mel spectra of the two
+correlated at 0.9996.
 
 **`lm_batch_size`** (int, default `1`)
 Songs generated from the prompt. Song `i` draws its score and its semantic
