@@ -400,6 +400,10 @@ static bool pipeline_generate(Yue2Pipeline *          p,
     if (!yue2_sampling_valid(r.abc_sampling, "abc") || !yue2_sampling_valid(r.semantic_sampling, "semantic")) {
         return false;
     }
+    if (r.abc_continue && (r.abc.empty() || r.cot == "off")) {
+        fprintf(stderr, "[Pipeline] FATAL: abc_continue takes the opening of a score in melody or full mode\n");
+        return false;
+    }
     std::string adapter_error;
     if (!pipeline_resolve_adapters(p, r, &p->ar_adapters, &p->nar_adapters, &adapter_error)) {
         fprintf(stderr, "[Pipeline] FATAL: %s\n", adapter_error.c_str());
@@ -434,7 +438,7 @@ static bool pipeline_generate(Yue2Pipeline *          p,
     std::vector<std::string>      scores(B);
     std::vector<bool>             truncated(B, false);
     bool                          has_score = cot != YUE2_COT_OFF;
-    bool                          planned   = has_score && r.abc.empty();
+    bool                          planned   = has_score && (r.abc.empty() || r.abc_continue);
 
     // The AR half holds the GPU for the plan and the semantic stage, then
     // steps aside for the synthesis
@@ -447,11 +451,22 @@ static bool pipeline_generate(Yue2Pipeline *          p,
         }
         lm_hold.emplace(p->store, lm);
     }
-    if (has_score && !r.abc.empty()) {
+    if (has_score && !planned) {
         abc_ids.assign(B, encode(r.abc));
         scores.assign(B, r.abc);
     } else if (has_score) {
-        std::vector<int>            open = yue2_build_prompt_ids(encode, cot, r.style, r.lyrics, nullptr);
+        std::vector<int> open = yue2_build_prompt_ids(encode, cot, r.style, r.lyrics, nullptr);
+        // an opening to continue goes in after ABC_START, its end token left out
+        std::vector<int> opening;
+        if (r.abc_continue) {
+            std::string text = r.abc;
+            if (text.back() != '\n') {
+                text += '\n';
+            }
+            opening = encode(text);
+            open.insert(open.end(), opening.begin(), opening.end());
+            fprintf(stderr, "[Pipeline] Score continues from an opening of %zu tokens\n", opening.size());
+        }
         std::vector<Yue2Generation> plans;
         pipeline_kv_capacity(p, (int) open.size() + r.abc_sampling.max_tokens + 1);
         std::vector<std::string> texts;
@@ -466,8 +481,8 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                     (double) r.harmony.section_strength, r.harmony.section_open, r.harmony.follow.size());
         }
         if (!yue2_generate(lm, &p->kv, std::vector<std::vector<int>>(B, open), {}, 1.0f, r.abc_sampling, r.lm_seed,
-                           YUE2_PHASE_ABC, &plans, cancelled, cancel_data, nullptr, nullptr,
-                           r.harmony.active() ? &harmony : nullptr)) {
+                           YUE2_PHASE_ABC, &plans, cancelled, cancel_data, nullptr,
+                           r.abc_continue ? &opening : nullptr, r.harmony.active() ? &harmony : nullptr)) {
             return false;
         }
         for (int i = 0; i < B; i++) {

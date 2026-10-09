@@ -54,6 +54,11 @@ struct Yue2Request {
     // and submitted again.
     std::string abc;  // ""
 
+    // with abc: the score is the opening of a plan, not the whole of it. It
+    // goes in without its end token and the model writes the rest of the
+    // song on from it, in its key and meter (a hummed or played seed).
+    bool abc_continue;  // false
+
     // chain of thought mode: "full", "melody" or "off"
     std::string cot;  // "full"
 

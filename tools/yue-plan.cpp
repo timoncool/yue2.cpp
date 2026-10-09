@@ -135,6 +135,13 @@ int main(int argc, char ** argv) {
     // The score slot stays open: this stage is the one that fills it
     std::vector<int> prefix = yue2_build_prompt_ids([&tok](const std::string & text) { return bpe_encode(&tok, text); },
                                                     cot, r.style, r.lyrics, nullptr);
+    // an opening to continue goes in after ABC_START, its end token left out
+    std::vector<int> opening;
+    if (r.abc_continue && !r.abc.empty()) {
+        std::string text = r.abc.back() == '\n' ? r.abc : r.abc + "\n";
+        opening          = bpe_encode(&tok, text);
+        prefix.insert(prefix.end(), opening.begin(), opening.end());
+    }
 
     if (dump_path) {
         std::string csv;
@@ -157,7 +164,7 @@ int main(int argc, char ** argv) {
         harmony = yue2_harmony_plan(r.harmony, &texts, YUE2_ABC_END);
     }
     if (!yue2_generate(&lm, &kv, std::vector<std::vector<int>>(1, prefix), {}, 1.0f, r.abc_sampling, r.lm_seed,
-                       YUE2_PHASE_ABC, &plans, nullptr, nullptr, nullptr, nullptr,
+                       YUE2_PHASE_ABC, &plans, nullptr, nullptr, nullptr, opening.empty() ? nullptr : &opening,
                        r.harmony.active() ? &harmony : nullptr)) {
         qw3lm_kv_free(&kv);
         qw3lm_free(&lm);

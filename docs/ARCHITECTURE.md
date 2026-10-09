@@ -605,6 +605,13 @@ tokenized into the prefix as is. Empty in `melody` or `full` mode hands
 the pen to the model, and the score it wrote comes back in the reply so it
 can be edited and submitted again.
 
+**`abc_continue`** (bool, default `false`)
+With `abc`: the score is only the opening of a plan (a hummed, played or
+written seed). It goes in after `ABC_START` without `ABC_END`, the planning
+stage writes the rest of the song on from it in its key and meter, and the
+whole plan, opening first, is what is sung and returned. Needs `melody` or
+`full` mode (after Mothersuperior's hum-to-song).
+
 **`cot`** (string, default `"full"`)
 Chain of thought mode: `"full"` for a chord annotated score, `"melody"`
 for a melody only score, `"off"` to skip the symbolic stage.

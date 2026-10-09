@@ -32,6 +32,7 @@ void request_init(Yue2Request * r) {
     r->companion_scale  = 1.0f;
     r->semantic_tokens  = "";
     r->continue_semantic_tokens = false;
+    r->abc_continue             = false;
 
     r->abc_sampling      = YUE2_ABC_SAMPLING;
     r->semantic_sampling = YUE2_SEMANTIC_SAMPLING;
@@ -288,6 +289,13 @@ static bool request_parse_obj(yyjson_val * obj, Yue2Request * r) {
     if ((v = yyjson_obj_get(obj, "semantic_tokens")) && yyjson_is_str(v)) {
         r->semantic_tokens = yy_str(v);
     }
+    if ((v = yyjson_obj_get(obj, "abc_continue")) && !yyjson_is_null(v)) {
+        if (!yyjson_is_bool(v)) {
+            fprintf(stderr, "[Request] ERROR: abc_continue must be a boolean\n");
+            return false;
+        }
+        r->abc_continue = yyjson_get_bool(v);
+    }
     if ((v = yyjson_obj_get(obj, "continue_semantic_tokens")) && !yyjson_is_null(v)) {
         if (!yyjson_is_bool(v)) {
             fprintf(stderr, "[Request] ERROR: continue_semantic_tokens must be a boolean\n");
@@ -446,6 +454,9 @@ std::string request_to_json(const Yue2Request * r, bool sparse) {
     add_sampling(doc, root, "semantic_sampling", r->semantic_sampling, d.semantic_sampling, sparse);
     if (!sparse || r->semantic_tokens != d.semantic_tokens) {
         yyjson_mut_obj_add_strncpy(doc, root, "semantic_tokens", r->semantic_tokens.c_str(), r->semantic_tokens.size());
+    }
+    if (!sparse || r->abc_continue) {
+        yyjson_mut_obj_add_bool(doc, root, "abc_continue", r->abc_continue);
     }
     if (!sparse || r->companion_scale != d.companion_scale) {
         yyjson_mut_obj_add_real(doc, root, "companion_scale", r->companion_scale);
