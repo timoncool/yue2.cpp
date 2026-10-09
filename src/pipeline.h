@@ -453,8 +453,20 @@ static bool pipeline_generate(Yue2Pipeline *          p,
         std::vector<int>            open = yue2_build_prompt_ids(encode, cot, r.style, r.lyrics, nullptr);
         std::vector<Yue2Generation> plans;
         pipeline_kv_capacity(p, (int) open.size() + r.abc_sampling.max_tokens + 1);
+        std::vector<std::string> texts;
+        Yue2HarmonyPlan          harmony;
+        if (r.harmony.active()) {
+            texts   = bpe_decode_each(tok, YUE2_EOD);
+            harmony = yue2_harmony_plan(r.harmony, &texts, YUE2_ABC_END);
+            fprintf(stderr,
+                    "[Harmony] %s strength=%.2f window=%d hold=%d outside=%.2f/%.2f section=%.2f/%d follow=%zu\n",
+                    r.harmony.by_root ? "root" : "spelling", (double) r.harmony.strength, r.harmony.window,
+                    r.harmony.hold_limit, (double) r.harmony.outside_bonus, (double) r.harmony.outside_limit,
+                    (double) r.harmony.section_strength, r.harmony.section_open, r.harmony.follow.size());
+        }
         if (!yue2_generate(lm, &p->kv, std::vector<std::vector<int>>(B, open), {}, 1.0f, r.abc_sampling, r.lm_seed,
-                           YUE2_PHASE_ABC, &plans, cancelled, cancel_data)) {
+                           YUE2_PHASE_ABC, &plans, cancelled, cancel_data, nullptr, nullptr,
+                           r.harmony.active() ? &harmony : nullptr)) {
             return false;
         }
         for (int i = 0; i < B; i++) {

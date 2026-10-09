@@ -5,6 +5,7 @@
 // Only fields the pipeline consumes: the protocol constants (vocabulary
 // slices, sampling presets, frame rate) live in the pipeline, not here.
 
+#include "harmony.h"
 #include "sampling.h"
 
 #include <cmath>
@@ -120,6 +121,12 @@ struct Yue2Request {
     // sections of the lyrics revealed as the score reaches them; needs a
     // supplied score, one prompt for every song and no guidance
     Yue2LyricSchedule lyric_schedule;  // off
+
+    // chord variety and section order of a planned score, see harmony.h;
+    // "harmony": {"identity": "root"|"spelling", "strength", "window",
+    // "hold_limit", "outside_bonus", "outside_limit", "section_strength",
+    // "section_open", "follow": ["intro", "verse", ...]}
+    Yue2Harmony harmony;  // off
 };
 
 // fills every field with its default

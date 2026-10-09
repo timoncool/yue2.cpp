@@ -149,8 +149,15 @@ int main(int argc, char ** argv) {
 
     // One plan: the batch counters of the request belong to the song pipeline
     std::vector<Yue2Generation> plans;
+    std::vector<std::string>    texts;
+    Yue2HarmonyPlan             harmony;
+    if (r.harmony.active()) {
+        texts   = bpe_decode_each(&tok, YUE2_EOD);
+        harmony = yue2_harmony_plan(r.harmony, &texts, YUE2_ABC_END);
+    }
     if (!yue2_generate(&lm, &kv, std::vector<std::vector<int>>(1, prefix), {}, 1.0f, r.abc_sampling, r.lm_seed,
-                       YUE2_PHASE_ABC, &plans)) {
+                       YUE2_PHASE_ABC, &plans, nullptr, nullptr, nullptr, nullptr,
+                       r.harmony.active() ? &harmony : nullptr)) {
         qw3lm_kv_free(&kv);
         qw3lm_free(&lm);
         return 1;

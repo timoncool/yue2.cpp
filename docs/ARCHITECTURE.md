@@ -683,6 +683,27 @@ repetition penalty positive, penalty window in [1, 100], `min_tokens`
 between 0 and `max_tokens`, `max_tokens` at least 1. A preset outside the
 bounds is a 400 from the server and a FATAL from the CLI.
 
+**`harmony`** (object, off by default)
+Chord variety and section order of a planned score (`src/harmony.h`, after
+Yeufonic). Only the ABC stage reads it, and only chord symbols and section
+comments are touched; every control is off at zero.
+`strength` (0-64): while a chord symbol is written, a candidate that would
+spell a chord heard among the last `window` (1-512, 16) changes loses
+`strength` times that chord's share of them; staying on the current root is
+free for `hold_limit` (0-64, 8, 0 no limit) symbols in a row, then costs a
+quarter of `strength` more with each. `identity`: `"root"` (default) counts
+C, Cmaj7 and C/E as one chord, `"spelling"` tells them apart.
+`outside_bonus` (0-20, root identity): a change to a root outside the key of
+the `K:` line gains this many logits while fewer than `outside_limit` (0-1,
+0.25) of the recent changes are outside. `section_strength` (0-64): the
+n-th chord a section moves to may not be the n-th chord the section before
+moved to, for its first `section_open` (1-16, 4) chords; a `% name` comment
+line starts a section. `follow` (up to 64 lower case names): the plan writes
+exactly these sections in order: after a `%` only the next name may be
+spelled, once the list is used no further `%` line may start, and the end
+token is held back until every section has begun and the last has 4 chords.
+Out of bounds is a 400 from the server and a FATAL from the CLI.
+
 ## yue-plan reference
 
 Runs the first autoregressive stage alone and writes the composition the
