@@ -472,8 +472,26 @@ static bool pipeline_generate(Yue2Pipeline *          p,
             open.insert(open.end(), opening.begin(), opening.end());
             fprintf(stderr, "[Pipeline] Score continues from an opening of %zu tokens\n", opening.size());
         }
+        // A song carried on past the end of the score it was sung from: the
+        // score goes on for the seconds asked for, at the pace it was sung
+        Yue2Sampling abc_sampling = r.abc_sampling;
+        if (resume && r.abc_continue) {
+            std::vector<int> values;
+            if (!pipeline_parse_tokens(r.semantic_tokens, &values)) {
+                return false;
+            }
+            double sung  = (double) values.size() / (double) YUE2_FRAME_RATE;
+            double extra = (double) r.duration - sung;
+            if (sung > 0.0 && extra > 0.0) {
+                int more                = (int) ((double) opening.size() / sung * extra) + 1;
+                abc_sampling.min_tokens = std::max(abc_sampling.min_tokens, (int) opening.size() + more * 3 / 4);
+                abc_sampling.max_tokens = std::max(abc_sampling.max_tokens, (int) opening.size() + more * 2);
+                fprintf(stderr, "[Pipeline] Continue: the score goes on for %.1f s, %d to %d tokens\n", extra,
+                        abc_sampling.min_tokens, abc_sampling.max_tokens);
+            }
+        }
         std::vector<Yue2Generation> plans;
-        pipeline_kv_capacity(p, (int) open.size() + r.abc_sampling.max_tokens + 1);
+        pipeline_kv_capacity(p, (int) open.size() + abc_sampling.max_tokens + 1);
         std::vector<std::string> texts;
         Yue2HarmonyPlan          harmony;
         if (r.harmony.active()) {
@@ -485,7 +503,7 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                     r.harmony.hold_limit, (double) r.harmony.outside_bonus, (double) r.harmony.outside_limit,
                     (double) r.harmony.section_strength, r.harmony.section_open, r.harmony.follow.size());
         }
-        if (!yue2_generate(lm, &p->kv, std::vector<std::vector<int>>(B, open), {}, 1.0f, r.abc_sampling, r.lm_seed,
+        if (!yue2_generate(lm, &p->kv, std::vector<std::vector<int>>(B, open), {}, 1.0f, abc_sampling, r.lm_seed,
                            YUE2_PHASE_ABC, &plans, cancelled, cancel_data, nullptr,
                            r.abc_continue ? &opening : nullptr, r.harmony.active() ? &harmony : nullptr)) {
             return false;
