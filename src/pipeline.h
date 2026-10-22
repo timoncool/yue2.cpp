@@ -17,6 +17,7 @@
 // into the halves at load, a half under another adapter list being another
 // module of the store.
 
+#include "audio-resample.h"
 #include "generate.h"
 #include "model-store.h"
 #include "nar.h"
@@ -24,6 +25,7 @@
 #include "score-check.h"
 #include "timer.h"
 #include "torch-cpu-rng.h"
+#include "vae-enc.h"
 #include "vae.h"
 
 #include <algorithm>
@@ -240,6 +242,74 @@ static VAEGGML * require_vae(Yue2Pipeline * p) {
     return store_require_vae(p->store, k);
 }
 
+static VAEEncoder * require_vae_enc(Yue2Pipeline * p) {
+    ModelKey k = { MODEL_VAE_ENC, p->vae_path, {} };
+    return store_require_vae_enc(p->store, k);
+}
+
+// Latents [T_lat, 64] time major to 48 kHz planar stereo [2, T_audio]
+static bool pipeline_decode(Yue2Pipeline *       p,
+                            VAEGGML *            vae,
+                            const float *        latents,
+                            int                  T_lat,
+                            std::vector<float> * audio,
+                            int *                T_audio,
+                            bool (*cancelled)(void *),
+                            void * cancel_data) {
+    int max_T_audio = T_lat * YUE2_HOP;
+    audio->assign((size_t) 2 * max_T_audio, 0.0f);
+    *T_audio = vae_ggml_decode_tiled(vae, latents, T_lat, audio->data(), max_T_audio, p->params.vae_core,
+                                     p->params.vae_halo, cancelled, cancel_data);
+    if (*T_audio < 0) {
+        return false;
+    }
+    audio->resize((size_t) 2 * *T_audio);
+    return true;
+}
+
+// A recording to its latents: planar stereo at any rate, each channel
+// resampled to 48 kHz, through the VAE encoder; [T_lat, 64] time major
+static bool pipeline_encode(Yue2Pipeline *       p,
+                            const float *        planar,
+                            int                  T,
+                            int                  sr,
+                            std::vector<float> * latents,
+                            int *                T_lat) {
+    int                T_audio = T;
+    std::vector<float> channels[2];
+    for (int c = 0; c < 2; c++) {
+        if (sr == YUE2_SAMPLE_RATE) {
+            channels[c].assign(planar + (size_t) c * T, planar + (size_t) (c + 1) * T);
+            continue;
+        }
+        float * rs = audio_resample(planar + (size_t) c * T, T, sr, YUE2_SAMPLE_RATE, 1, &T_audio);
+        if (!rs) {
+            return false;
+        }
+        channels[c].assign(rs, rs + T_audio);
+        free(rs);
+    }
+    std::vector<float> interleaved((size_t) 2 * T_audio);
+    for (int t = 0; t < T_audio; t++) {
+        interleaved[(size_t) 2 * t]     = channels[0][(size_t) t];
+        interleaved[(size_t) 2 * t + 1] = channels[1][(size_t) t];
+    }
+    VAEEncoder * enc = require_vae_enc(p);
+    if (!enc) {
+        return false;
+    }
+    ModelHandle hold(p->store, enc);
+    int         max_T_lat = T_audio / YUE2_HOP + 1;
+    latents->assign((size_t) max_T_lat * YUE2_LATENT_DIM, 0.0f);
+    *T_lat = vae_enc_encode_tiled(enc, interleaved.data(), T_audio, latents->data(), max_T_lat, p->params.vae_core,
+                                  p->params.vae_halo);
+    if (*T_lat < 0) {
+        return false;
+    }
+    latents->resize((size_t) *T_lat * YUE2_LATENT_DIM);
+    return true;
+}
+
 static AudioTokenizer * require_atok(Yue2Pipeline * p) {
     ModelKey         k = { MODEL_ATOK, p->tokenizer_path, {} };
     AudioTokenizer * m = store_require_atok(p->store, k);
@@ -317,10 +387,68 @@ struct KvScope {
     }
 };
 
-// Renders lm_batch_size songs times synth_batch_size variations, song-major:
-// track song * M + variation. Song i draws its tokens with lm_seed + i in
-// KV set i, variation j draws its noise with seed + j, and the M variations
-// of a song solve in one NAR graph over the set the AR left complete.
+// The codes of a continuation: the section [source_start, source_end) of
+// the source stream opens the song, the AR writes on behind the prompt and
+// it until the requested length or its end token. The whole song is then
+// rendered like a generated one, the section included.
+static bool pipeline_continue_codes(Yue2Pipeline *           p,
+                                    Qwen3LM *                lm,
+                                    const Yue2Request &      r,
+                                    const std::vector<int> & prompt,
+                                    const std::vector<int> * negative,
+                                    float                    guidance,
+                                    Yue2Generation *         codes,
+                                    bool (*cancelled)(void *),
+                                    void * cancel_data) {
+    std::vector<int> values;
+    if (!pipeline_parse_tokens(r.source_tokens, &values)) {
+        return false;
+    }
+    const int T_src = (int) values.size();
+    const int a     = std::clamp((int) lroundf(r.source_start * YUE2_FRAME_RATE), 0, T_src);
+    const int b     = r.source_end < 0.0f ? T_src : std::clamp((int) lroundf(r.source_end * YUE2_FRAME_RATE), 0, T_src);
+    if (b <= a) {
+        fprintf(stderr, "[Continue] FATAL: empty source section %.2f s .. %.2f s\n", (double) r.source_start,
+                (double) r.source_end);
+        return false;
+    }
+
+    // The requested length counts the section, the stage keeps its own cap
+    Yue2Sampling sampling = r.semantic_sampling;
+    int          budget   = sampling.max_tokens - (b - a);
+    if (r.duration > 0.0f) {
+        budget = std::min(budget, (int) (r.duration * (float) YUE2_FRAME_RATE) - (b - a));
+    }
+    if (budget < 1) {
+        fprintf(stderr, "[Continue] FATAL: nothing left to write after the %d frames of the section\n", b - a);
+        return false;
+    }
+    sampling.max_tokens = budget;
+    sampling.min_tokens = std::min(sampling.min_tokens, budget);
+    fprintf(stderr, "[Continue] Source %d frames, section [%d, %d), budget %d\n", T_src, a, b, budget);
+
+    std::vector<int> section((size_t) (b - a));
+    for (int f = a; f < b; f++) {
+        section[(size_t) (f - a)] = values[(size_t) f] + YUE2_CODEC_OFFSET;
+    }
+    std::vector<std::vector<int>> prefixes(1, prompt), negatives;
+    prefixes[0].insert(prefixes[0].end(), section.begin(), section.end());
+    if (negative) {
+        negatives.assign(1, *negative);
+        negatives[0].insert(negatives[0].end(), section.begin(), section.end());
+    }
+    pipeline_kv_capacity(p, (int) prompt.size() + 2 * ((b - a) + budget) + 3);
+    std::vector<Yue2Generation> drawn;
+    if (!yue2_generate(lm, &p->kv, prefixes, negatives, guidance, sampling, r.lm_seed, YUE2_PHASE_SEMANTIC, &drawn,
+                       cancelled, cancel_data)) {
+        return false;
+    }
+    codes->tokens = section;
+    codes->tokens.insert(codes->tokens.end(), drawn[0].tokens.begin(), drawn[0].tokens.end());
+    codes->truncated = drawn[0].truncated;
+    return true;
+}
+
 // Byte offset of codepoint cp in UTF-8 text, or -1 past its end.
 static int64_t pipeline_cp_to_byte(const std::string & text, int64_t cp) {
     int64_t n = 0;
@@ -382,6 +510,12 @@ static bool pipeline_lyric_mask(const BPETokenizer * tok, const Yue2Request & r,
     return true;
 }
 
+// Renders lm_batch_size songs times synth_batch_size variations, song-major:
+// track song * M + variation. Song i draws its tokens with lm_seed + i in
+// KV set i, variation j draws its noise with seed + j, and the M variations
+// of a song solve in one NAR graph over the set the AR left complete. With
+// source_tokens, the song opens on the section of the source the request
+// names and the AR writes on from it.
 static bool pipeline_generate(Yue2Pipeline *          p,
                               const Yue2Request &     r,
                               std::vector<Yue2Song> * songs,
@@ -423,18 +557,24 @@ static bool pipeline_generate(Yue2Pipeline *          p,
     };
 
     // A supplied stream is one song, the batch counter has nothing to draw:
-    // rendered as it is, or carried on from where it stops
-    bool resume = !r.semantic_tokens.empty() && r.continue_semantic_tokens;
-    bool replay = !r.semantic_tokens.empty() && !resume;
-    if ((replay || resume) && r.lm_batch_size > 1) {
-        fprintf(stderr, "[Pipeline] %s: lm_batch_size ignored\n", resume ? "Continue" : "Replay");
+    // rendered as it is, carried on from where it stops, or a source section
+    // continued
+    bool resume    = !r.semantic_tokens.empty() && r.continue_semantic_tokens;
+    bool replay    = !r.semantic_tokens.empty() && !resume;
+    bool continued = !r.source_tokens.empty();
+    if (!r.semantic_tokens.empty() && continued) {
+        fprintf(stderr, "[Pipeline] FATAL: semantic_tokens and source_tokens are exclusive\n");
+        return false;
     }
-    const int B = replay || resume ? 1 : r.lm_batch_size;
+    if ((replay || resume || continued) && r.lm_batch_size > 1) {
+        fprintf(stderr, "[Pipeline] Supplied stream: lm_batch_size ignored\n");
+    }
+    const int B = replay || resume || continued ? 1 : r.lm_batch_size;
     const int M = r.synth_batch_size;
 
     // A supplied stream with no score renders without one, whatever the
     // mode: a score planned now is not the one the codes follow
-    if (replay && r.abc.empty()) {
+    if ((replay || continued) && r.abc.empty()) {
         cot = YUE2_COT_OFF;
     }
 
@@ -573,6 +713,11 @@ static bool pipeline_generate(Yue2Pipeline *          p,
         codes[0].truncated = false;
         fprintf(stderr, "[Pipeline] Replay: %zu frames supplied\n", codes[0].tokens.size());
         pipeline_kv_capacity(p, (int) prefixes[0].size() + 2 * (int) values.size() + 3);
+    } else if (continued) {
+        if (!pipeline_continue_codes(p, lm, r, prefixes[0], negatives.empty() ? nullptr : &negatives[0], guidance,
+                                     &codes[0], cancelled, cancel_data)) {
+            return false;
+        }
     } else {
         // The requested length caps the budget of the stage, never raises it
         Yue2Sampling semantic = r.semantic_sampling;
@@ -780,16 +925,12 @@ static bool pipeline_generate(Yue2Pipeline *          p,
     }
     ModelHandle vae_hold(p->store, vae);
     for (size_t t = 0; t < songs->size(); t++) {
-        Yue2Song & song        = (*songs)[t];
-        int        max_T_audio = song.T_lat * YUE2_HOP;
+        Yue2Song & song = (*songs)[t];
         fprintf(stderr, "[VAE] Track %zu/%zu: song %zu variation %zu\n", t + 1, songs->size(), t / M, t % M);
-        song.audio.assign((size_t) 2 * max_T_audio, 0.0f);
-        song.T_audio = vae_ggml_decode_tiled(vae, song.latents.data(), song.T_lat, song.audio.data(), max_T_audio,
-                                             p->params.vae_core, p->params.vae_halo, cancelled, cancel_data);
-        if (song.T_audio < 0) {
+        if (!pipeline_decode(p, vae, song.latents.data(), song.T_lat, &song.audio, &song.T_audio, cancelled,
+                             cancel_data)) {
             return false;
         }
-        song.audio.resize((size_t) 2 * song.T_audio);
         if (t == 0 && p->dumper.enabled) {
             // Interleaved [T_audio, 2] like the torch reference dump
             std::vector<float> interleaved((size_t) 2 * song.T_audio);

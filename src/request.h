@@ -136,6 +136,13 @@ struct Yue2Request {
     // "hold_limit", "outside_bonus", "outside_limit", "section_strength",
     // "section_open", "follow": ["intro", "verse", ...]}
     Yue2Harmony harmony;  // off
+
+    // continuation: the semantic stream of a source song, its section
+    // [source_start, source_end) in seconds opening the song the model then
+    // writes on from. source_end -1 is the end of the source.
+    std::string source_tokens;  // "" (no continuation)
+    float       source_start;   // 0
+    float       source_end;     // -1
 };
 
 // fills every field with its default
@@ -154,7 +161,8 @@ std::string request_to_json(const Yue2Request * r, bool sparse = true);
 void request_resolve_seed(Yue2Request * r);
 
 // the request that renders one track of a batch again without the
-// autoregression: its score, its semantic stream and the two seeds it consumed
+// autoregression: its score, its semantic stream and the two seeds it
+// consumed, the stream of a continued track whole and its source dropped
 Yue2Request request_replay(const Yue2Request & base,
                            const std::string & abc,
                            const std::string & tokens,

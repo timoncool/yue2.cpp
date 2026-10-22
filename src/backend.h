@@ -66,8 +66,8 @@ static ggml_backend_t cpu_backend_new(int n_threads) {
 // count when the run ends (tames the CUDA graph capture "reused" flood).
 static void yue2_ggml_log(enum ggml_log_level level, const char * text, void * user_data) {
     (void) user_data;
-    // Debug chatter (CUDA graph reuse and friends) stays silent unless asked
-    if (level == GGML_LOG_LEVEL_DEBUG && !getenv("YUE2_LOG_DEBUG")) {
+    // Debug chatter (CUDA graph reuse and friends) stays silent
+    if (level == GGML_LOG_LEVEL_DEBUG) {
         return;
     }
     static char last[256] = { 0 };
@@ -144,16 +144,72 @@ static void backend_self_test(ggml_backend_t backend) {
     fprintf(stderr, "[Load] Self-test on %s: ok (%.1f ms)\n", ggml_backend_name(backend), ms);
 }
 
-// Initialize backends: load all available (CUDA, Metal, Vulkan...),
-// pick the best one, keep CPU as fallback.
+// Device named by --device, NULL for the best available one. Inline so
+// every translation unit of the binary sees the one main sets.
+inline const char * g_backend_device = NULL;
+
+// Install the log callback and load every backend, once per process.
+static void backend_load(void) {
+    static const bool loaded = [] {
+        ggml_log_set(yue2_ggml_log, nullptr);
+        // A release ships one CUDA backend per toolkit, each in a folder of its
+        // own, and the launcher names the one this card and driver run in
+        // YUE_CUDA_BACKEND. Loaded before the rest, so its devices outrank
+        // Vulkan's as they do from the default place.
+        const char * cuda_backend = std::getenv("YUE_CUDA_BACKEND");
+        bool         cuda_loaded  = false;
+        if (cuda_backend && cuda_backend[0]) {
+            if (!ggml_backend_load(cuda_backend)) {
+                fprintf(stderr, "[Load] FATAL: YUE_CUDA_BACKEND=%s did not load\n", cuda_backend);
+                exit(1);
+            }
+            cuda_loaded = true;
+        }
+        ggml_backend_load_all();
+        // An update over an older install can leave a ggml-cuda.dll beside the
+        // executable: the named backend stays, a second CUDA goes
+        if (cuda_loaded) {
+            bool first = true;
+            for (size_t i = 0; i < ggml_backend_reg_count();) {
+                ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+                if (strcmp(ggml_backend_reg_name(reg), "CUDA") == 0 && !first) {
+                    ggml_backend_unload(reg);
+                    continue;
+                }
+                if (strcmp(ggml_backend_reg_name(reg), "CUDA") == 0) {
+                    first = false;
+                }
+                i++;
+            }
+        }
+        return true;
+    }();
+    (void) loaded;
+}
+
+// Select the device of every later backend_init by name (CUDA0, Vulkan0,
+// MTL0, CPU...). Returns false and lists the available devices when the
+// name matches none.
+static bool backend_set_device(const char * name) {
+    backend_load();
+    if (!ggml_backend_dev_by_name(name)) {
+        fprintf(stderr, "--device %s not found. Available:", name);
+        for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
+            fprintf(stderr, " %s", ggml_backend_dev_name(ggml_backend_dev_get(i)));
+        }
+        fprintf(stderr, "\n");
+        return false;
+    }
+    g_backend_device = name;
+    return true;
+}
+
+// Initialize backends: the device named by --device or the best available
+// one (CUDA, Metal, Vulkan...), keep CPU as fallback.
 // label: log prefix, e.g. "LM", "NAR", "VAE"
 // Subsequent calls reuse the same backend (single VMM pool).
 static BackendPair backend_init(const char * label) {
-    static bool log_installed = false;
-    if (!log_installed) {
-        ggml_log_set(yue2_ggml_log, nullptr);
-        log_installed = true;
-    }
+    backend_load();
 
     if (g_backend_refs > 0) {
         g_backend_refs++;
@@ -161,54 +217,8 @@ static BackendPair backend_init(const char * label) {
         return g_backend_cache;
     }
 
-    // A release ships one CUDA backend per toolkit, each in a folder of its
-    // own, and the launcher names the one this card and driver run in
-    // YUE_CUDA_BACKEND. Loaded before the rest, so its devices outrank
-    // Vulkan's as they do from the default place.
-    static bool  cuda_loaded  = false;
-    const char * cuda_backend = std::getenv("YUE_CUDA_BACKEND");
-    if (!cuda_loaded && cuda_backend && cuda_backend[0]) {
-        if (!ggml_backend_load(cuda_backend)) {
-            fprintf(stderr, "[Load] FATAL: YUE_CUDA_BACKEND=%s did not load\n", cuda_backend);
-            exit(1);
-        }
-        cuda_loaded = true;
-    }
-    ggml_backend_load_all();
-    // An update over an older install can leave a ggml-cuda.dll beside the
-    // executable: the named backend stays, a second CUDA goes
-    if (cuda_loaded) {
-        bool first = true;
-        for (size_t i = 0; i < ggml_backend_reg_count();) {
-            ggml_backend_reg_t reg = ggml_backend_reg_get(i);
-            if (strcmp(ggml_backend_reg_name(reg), "CUDA") == 0 && !first) {
-                ggml_backend_unload(reg);
-                continue;
-            }
-            if (strcmp(ggml_backend_reg_name(reg), "CUDA") == 0) {
-                first = false;
-            }
-            i++;
-        }
-    }
     BackendPair bp = {};
-
-    // GGML_BACKEND env var: force a specific device instead of auto-best.
-    // Device names: CUDA0, Vulkan0, CPU, BLAS (see ggml_backend_dev_name).
-    const char * force_backend = std::getenv("GGML_BACKEND");
-    if (force_backend) {
-        bp.backend = ggml_backend_init_by_name(force_backend, nullptr);
-        if (!bp.backend) {
-            fprintf(stderr, "[Load] FATAL: GGML_BACKEND=%s not found. Available:", force_backend);
-            for (size_t i = 0; i < ggml_backend_dev_count(); i++) {
-                fprintf(stderr, " %s", ggml_backend_dev_name(ggml_backend_dev_get(i)));
-            }
-            fprintf(stderr, "\n");
-            exit(1);
-        }
-    } else {
-        bp.backend = ggml_backend_init_best();
-    }
+    bp.backend     = g_backend_device ? ggml_backend_init_by_name(g_backend_device, nullptr) : ggml_backend_init_best();
     if (!bp.backend) {
         fprintf(stderr, "[Load] FATAL: no backend available\n");
         exit(1);

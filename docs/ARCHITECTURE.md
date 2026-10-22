@@ -67,9 +67,8 @@ codes), `neural-codec` (Oobleck VAE codec), `mp3-codec` (MP3
 encoder/decoder) and `quantize` (GGUF requantizer).
 
 A single `build/` directory serves every backend combination. With
-`buildall`, the backend is picked at runtime: the `GGML_BACKEND`
-environment variable forces a specific device (`CUDA0`, `Vulkan0`, `CPU`),
-unset picks the best available one.
+`buildall`, the backend is picked at runtime: `--device` forces a specific
+device (`CUDA0`, `Vulkan0`, `CPU`), omitted picks the best available one.
 
 ## Models
 
@@ -130,8 +129,8 @@ decides what stays in VRAM following its eviction policy:
 
 - `EVICT_STRICT` (default, hardcoded in the CLIs): at most one
   coexistence group resident at a time. The AR group `{ LM }` runs the
-  score and the semantic stages, the synthesis group `{ NAR, VAE }` the
-  flow matching and the decode, so when the synthesis group is required
+  score and the semantic stages, the synthesis group `{ NAR, VAE,
+  VAE encoder }` the flow matching, the decode and the encode, so when the synthesis group is required
   the AR half has been released and is unloaded. The two halves of the
   backbone never coexist, the peak is the larger one. The heads that
   listen to a recording, `{ SS2, ATOK }` (the transcriber and the audio
@@ -384,6 +383,13 @@ spectrum by a fraction of a dB: the codes of a quantized MERT stay within
 0.25 dB of the F32 ones in long term spectrum once rendered, and the same
 quant beside rule holds.
 
+### Continuation
+
+The codes of a section of a source song open the prompt of the AR, which
+writes the rest of the song from there, up to `duration` or its end token.
+The NAR then renders the whole song, so the section comes out as the model
+hears it and the rest grows from it.
+
 ### LoRA adapters (`src/adapter.h`, optional)
 
 ```
@@ -583,6 +589,9 @@ the server rejects a request with neither.
     "output_format":   "mp3",
     "mp3_bitrate":     128,
     "adapters":        [],
+    "source_tokens":   "",
+    "source_start":    0.0,
+    "source_end":      -1.0,
     "abc_sampling":      { "temperature": 0.7, "top_p": 0.9,  "top_k": 30,  "repetition_penalty": 1.005, "penalty_window": 100, "min_tokens": 32,  "max_tokens": 4096 },
     "semantic_sampling": { "temperature": 1.0, "top_p": 0.95, "top_k": 100, "repetition_penalty": 1.2,   "penalty_window": 50,  "min_tokens": 200, "max_tokens": 9000 }
 }
@@ -692,6 +701,11 @@ never reloads the NAR half. `"adapter"` and `"adapter_scale"` are read too,
 as a one entry list. An unknown name is a 400 from the server and a FATAL
 from the CLI.
 
+**`source_tokens`**, **`source_start`**, **`source_end`** (string, floats, default `""`, `0` and `-1`)
+The codes of a source song and the section of it, in seconds, the new song
+starts with; `-1` is the end of the source. Exclusive with
+`semantic_tokens`.
+
 **`abc_sampling`**, **`semantic_sampling`** (objects)
 Per stage sampling presets, checkpoint values by default. Bounds enforced
 on both sides: temperature in [0, 5], top-p in (0, 1], top-k at least 1,
@@ -740,6 +754,8 @@ Required:
   --request <json>       Input request JSON
 
 Optional:
+  --device <name>        Compute device: CUDA0, Vulkan0, MTL0, CPU...
+                         (default: best available)
   --out <path>           Output score (default: score.abc)
   --lm-seed <N>          Token sampling seed (default: random)
 
@@ -765,6 +781,8 @@ Required:
   --request <json>       Input request JSON
 
 Optional:
+  --device <name>        Compute device: CUDA0, Vulkan0, MTL0, CPU...
+                         (default: best available)
   --out <path>           Output audio (default: song.mp3), a batch numbers it
   --duration <s>         Target length in seconds
   --lm-seed <N>          Token sampling seed
@@ -806,6 +824,8 @@ Required:
   --vae <gguf>           VAE GGUF
 
 Optional:
+  --device <name>        Compute device: CUDA0, Vulkan0, MTL0, CPU...
+                         (default: best available)
   --transcriber <gguf>   SheetSage2 GGUF, MERT beside it, enables /transcribe
   --tokenizer <gguf>     Audio tokenizer GGUF, MERT beside it, enables /tokenize
   --adapters <dir>       Adapter directory, requests name its entries
@@ -837,8 +857,9 @@ POST /synth                     Submit a generation job, returns job ID
   response: {"id":"1a2b..."}
   400 on malformed JSON, unknown cot mode, unknown output_format,
   steps < 1, lm_batch_size outside [1, --max-batch], synth_batch_size
-  outside [1, 9], or a sampling preset outside the protocol bounds, or an adapter
-  name the adapter directory does not hold
+  outside [1, 9], a sampling preset outside the protocol bounds, an
+  adapter name the adapter directory does not hold, or both semantic_tokens
+  and source_tokens
 
 POST /transcribe                Submit a transcription job, returns job ID
   body: multipart/form-data, an "audio" part (WAV or MP3) and an optional
@@ -853,14 +874,26 @@ POST /tokenize                  Submit a tokenization job, returns job ID
   400 without an audio part or on audio that does not decode
   the route is served when the server runs with --tokenizer
 
+POST /vae                       Submit a VAE job, returns job ID
+  body: multipart/form-data, exactly one of an "audio" part (WAV or MP3,
+  encode) or a "src_latents" part (raw f32 [T, 64] time major, the .vae
+  layout, decode), and an optional "request" part (JSON) whose
+  output_format, peak_clip and mp3_bitrate drive a decode
+  response: {"id":"1a2b..."}
+  400 with both parts or neither, on audio that does not decode, or on
+  latents that are not whole frames within the context
+
 GET  /job?id=N                  Poll job status
   response: {"status":"running|done|failed|cancelled"}
 
 GET  /job?id=N&result=1         Fetch job result
   multipart/mixed, boundary yue2-batch-boundary: per track, song-major,
   one application/json replay request part (the request carrying the
-  semantic stream, the score and the seeds of that track) then one
-  audio/mpeg or audio/wav part; for a transcription job, application/json,
+  semantic stream, the score and the seeds of that track), one
+  audio/mpeg or audio/wav part and one application/octet-stream part with
+  the latents the audio was decoded from (raw f32 [T, 64], the .vae
+  layout); for a VAE job, application/octet-stream latents from an encode
+  or the audio of a decode; for a transcription job, application/json,
   the score as {"abc":"X:1\n..."}; for a tokenization job,
   application/json, the codes as {"codes":"12046,8433,..."}
   404 while the result is not ready
@@ -929,6 +962,8 @@ Required:
   --audio <file>         Recording to transcribe (WAV or MP3)
 
 Optional:
+  --device <name>        Compute device: CUDA0, Vulkan0, MTL0, CPU...
+                         (default: best available)
   --out <path>           Output score (default: score.abc)
   --melody-only          Omit the chord symbols from the score
 
@@ -954,6 +989,8 @@ Required:
   --audio <file>         Recording to tokenize (WAV or MP3)
 
 Optional:
+  --device <name>        Compute device: CUDA0, Vulkan0, MTL0, CPU...
+                         (default: best available)
   --out <path>           Output codes (default: codes.csv)
 
 Debug:
@@ -982,6 +1019,8 @@ Required:
   -i <path>               Input file
 
 Optional:
+  --device <name>         Compute device: CUDA0, Vulkan0, MTL0, CPU...
+                          (default: best available)
   -o <path>               Output file (default: input with swapped extension)
   --q8                    Quantize the latent to int8 (encode only)
   --q4                    Quantize the latent to 4 bits (encode only)
@@ -1037,9 +1076,10 @@ One test per subject under `tests/`, run from `tests/` with the ready build
 in `../build`. Each `test-*.py` owns both sides of its comparison: it builds
 the torch reference, runs its `test-*` binary on the same inputs, checks
 relative RMS and max absolute error against its own threshold, prints one
-line per case and exits non zero on failure. `GGML_BACKEND` selects the
-device, and the `test-*.sh` next to each test runs it on every backend that
-matters for it and archives the output as `{backend}-{subject}.log`.
+line per case and exits non zero on failure. A leading `--device <name>`
+selects the device, and the `test-*.sh` next to each test runs it on every
+backend that matters for it and archives the output as
+`{backend}-{subject}.log`.
 
 Twenty four cases, all green on CUDA0 and CPU:
 
