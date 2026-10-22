@@ -591,6 +591,7 @@ the server rejects a request with neither.
     "source_tokens":   "",
     "source_start":    0.0,
     "source_end":      -1.0,
+    "plan_retries":    2,
     "abc_sampling":      { "temperature": 0.7, "top_p": 0.9,  "top_k": 30,  "repetition_penalty": 1.005, "penalty_window": 100, "min_tokens": 32,  "max_tokens": 4096 },
     "semantic_sampling": { "temperature": 1.0, "top_p": 0.95, "top_k": 100, "repetition_penalty": 1.2,   "penalty_window": 50,  "min_tokens": 200, "max_tokens": 9000 }
 }
@@ -698,6 +699,14 @@ semantic stage (`src/score-check.h`): a header without a well-formed `M:`,
 chord symbols, inline fields and repeat bars. The log shows the start of the
 score in printable ASCII and a FATAL naming what is wrong; `yue-plan` only
 warns.
+
+**`plan_retries`** (int, default `2`, bound `8`)
+How many times a planned score that cannot be sung is planned again before
+the request stops. Song `i`'s attempt `k` draws with `lm_seed + i + k *
+lm_batch_size`, a seed no other song of the batch draws, so the same request
+replays to the same score; the replay request of the track carries the score
+that was sung. Outside the bound is a 400 from the server and a FATAL from
+the CLI.
 
 ## yue-plan reference
 
@@ -813,9 +822,9 @@ POST /synth                     Submit a generation job, returns job ID
   response: {"id":"1a2b..."}
   400 on malformed JSON, unknown cot mode, unknown output_format,
   steps < 1, lm_batch_size outside [1, --max-batch], synth_batch_size
-  outside [1, 9], a sampling preset outside the protocol bounds, an
-  adapter missing from the --adapters directory, or both semantic_tokens
-  and source_tokens
+  outside [1, 9], plan_retries outside [0, 8], a sampling preset outside
+  the protocol bounds, an adapter missing from the --adapters directory, or
+  both semantic_tokens and source_tokens
 
 POST /transcribe                Submit a transcription job, returns job ID
   body: multipart/form-data, an "audio" part (WAV or MP3) and an optional
