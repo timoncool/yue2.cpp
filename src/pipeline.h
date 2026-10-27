@@ -875,11 +875,21 @@ static bool pipeline_generate(Yue2Pipeline *          p,
         const int prefix_len = (int) prefixes[i].size();
         const int chunk_size = chunk_sizes[i];
         const int T_lat      = (int) codes[i].tokens.size();
-        int       chunks     = (T_lat + chunk_size - 1) / chunk_size;
+        // A chunk after the first begins `overlap` frames before the one ahead of it ends, solves them again from
+        // the same noise and fades into them, so the song does not break where one chunk meets the next
+        const int overlap    = T_lat > chunk_size ? std::min(chunk_size / 4, 2 * YUE2_FRAME_RATE) : 0;
+        const int stride     = chunk_size - overlap;
+        const int chunks     = T_lat <= chunk_size ? 1 : 1 + (T_lat - chunk_size + stride - 1) / stride;
         fprintf(stderr, "[NAR] Song %d: %d frames (%.1f s), prefix %d, %d chunk%s of %d, %d variation%s\n", i, T_lat,
                 (float) T_lat / (float) YUE2_FRAME_RATE, prefix_len, chunks, chunks > 1 ? "s" : "", chunk_size, M,
                 M > 1 ? "s" : "");
-        for (int start = 0; start < T_lat; start += chunk_size) {
+        std::vector<std::vector<float>> noise;
+        if (chunks > 1) {
+            for (int j = 0; j < M; j++) {
+                noise.push_back((*songs)[(size_t) i * M + j].latents);
+            }
+        }
+        for (int chunk = 0, start = 0; chunk < chunks; chunk++, start += stride) {
             Timer chunk_timer;
             int   frames = T_lat - start < chunk_size ? T_lat - start : chunk_size;
             int   ar_len = prefix_len + frames + 1;
@@ -924,20 +934,29 @@ static bool pipeline_generate(Yue2Pipeline *          p,
             size_t span = (size_t) frames * YUE2_LATENT_DIM;
             block.resize(span * M);
             for (int j = 0; j < M; j++) {
-                memcpy(block.data() + span * j,
-                       (*songs)[(size_t) i * M + j].latents.data() + (size_t) start * YUE2_LATENT_DIM,
-                       span * sizeof(float));
+                const float * from = chunks > 1 ? noise[(size_t) j].data() : (*songs)[(size_t) i * M + j].latents.data();
+                memcpy(block.data() + span * j, from + (size_t) start * YUE2_LATENT_DIM, span * sizeof(float));
             }
             if (!nar_solve(nar, &p->kv, block.data(), frames, M, ar_len, i, r.steps, dbg, cancelled, cancel_data,
                            solver)) {
                 return false;
             }
+            const int fade = chunk > 0 ? overlap : 0;
             for (int j = 0; j < M; j++) {
-                memcpy((*songs)[(size_t) i * M + j].latents.data() + (size_t) start * YUE2_LATENT_DIM,
-                       block.data() + span * j, span * sizeof(float));
+                float *       to     = (*songs)[(size_t) i * M + j].latents.data() + (size_t) start * YUE2_LATENT_DIM;
+                const float * solved = block.data() + span * j;
+                for (int t = 0; t < fade; t++) {
+                    const float w = ((float) t + 0.5f) / (float) fade;
+                    for (int d = 0; d < YUE2_LATENT_DIM; d++) {
+                        const size_t k = (size_t) t * YUE2_LATENT_DIM + d;
+                        to[k]          = (1.0f - w) * to[k] + w * solved[k];
+                    }
+                }
+                memcpy(to + (size_t) fade * YUE2_LATENT_DIM, solved + (size_t) fade * YUE2_LATENT_DIM,
+                       (size_t) (frames - fade) * YUE2_LATENT_DIM * sizeof(float));
             }
             fprintf(stderr, "[NAR] Song %d chunk %d/%d: %d frames, cache %d rows, %d forwarded, %.1f s\n", i,
-                    start / chunk_size + 1, chunks, frames, ar_len, ar_len - kept, chunk_timer.ms() / 1000.0);
+                    chunk + 1, chunks, frames, ar_len, ar_len - kept, chunk_timer.ms() / 1000.0);
         }
     }
 
