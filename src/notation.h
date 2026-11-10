@@ -161,7 +161,12 @@ static int not_mode_first(const std::vector<int> & values) {
 // Measures from the downbeats: a pickup before the first, a partial after
 // the last, every span between two downbeats a full measure; the numerator
 // is the beat count of the span, a final partial span keeps its declared
-// meter with a trailing rest, a short first span pads with a leading rest
+// meter with a trailing rest, a short first span pads with a leading rest.
+// A span whose length disagrees with the meter its own beats declare is a
+// mislabelled downbeat (SheetSage2 can call a weak beat beat 1 at a phrase
+// boundary, which the reference export writes out as a 1/4, 2/4 or 3/4 bar),
+// not a meter change: from there the measures are cut every declared
+// numerator, which is what the beats themselves say the bar is.
 static bool not_measures(const std::vector<NotBeat> & beats, std::vector<NotMeasure> * measures, std::string * error) {
     std::vector<int> downbeats;
     for (size_t i = 0; i < beats.size(); i++) {
@@ -192,26 +197,52 @@ static bool not_measures(const std::vector<NotBeat> & beats, std::vector<NotMeas
         return not_fail(error, "No positive-length measure exists between downbeats");
     }
     measures->clear();
+    int repair_from = -1;
     for (size_t mi = 0; mi < spans.size(); mi++) {
         const Span &     sp    = spans[mi];
         int              count = sp.end - sp.start;
         std::vector<int> dens, nums;
         for (int i = sp.start; i < sp.end; i++) {
-            if (beats[i].beat_id != beats[sp.start].beat_id + (i - sp.start)) {
-                return not_fail(error, "Measure " + std::to_string(mi) + ": non-consecutive beat IDs");
-            }
             dens.push_back(beats[i].den);
             nums.push_back(beats[i].num);
-        }
-        if (!sp.pickup && beats[sp.start].beat_id != 1) {
-            return not_fail(error, "Measure " + std::to_string(mi) + ": full measure does not start at beat ID 1");
         }
         int  den          = not_mode_first(dens);
         int  declared     = not_mode_first(nums);
         bool same_num     = std::all_of(nums.begin(), nums.end(), [&](int v) { return v == nums[0]; });
         bool den_conflict = std::any_of(dens.begin(), dens.end(), [&](int v) { return v != den; });
+        // The span length and the meter the beats carry disagree, and the beats
+        // agree with each other: the later downbeat was labelled too early (or
+        // too late), not the meter changed. Re-cut the rest of the score from
+        // this measure on; the measures already built stay untouched.
+        if (!sp.pickup && !sp.partial && same_num && !den_conflict && count != declared) {
+            repair_from = sp.start;
+            break;
+        }
+        if (!sp.pickup && beats[sp.start].beat_id != 1) {
+            return not_fail(error, "Measure " + std::to_string(mi) + ": full measure does not start at beat ID 1");
+        }
+        for (int i = sp.start; i < sp.end; i++) {
+            if (beats[i].beat_id != beats[sp.start].beat_id + (i - sp.start)) {
+                return not_fail(error, "Measure " + std::to_string(mi) + ": non-consecutive beat IDs");
+            }
+        }
         bool pad_final    = sp.partial && same_num && !den_conflict && declared >= count;
         measures->push_back({ sp.start, sp.end, count, den, pad_final ? declared : count, den, false });
+    }
+    if (repair_from >= 0) {
+        const int last = (int) beats.size() - 1;
+        for (int start = repair_from; start < last;) {
+            int num = beats[(size_t) start].num;
+            int den = beats[(size_t) start].den;
+            if (num <= 0 || den <= 0) {
+                return not_fail(error, "Measure: the beats carry no meter");
+            }
+            int end     = std::min(last, start + num);
+            int count   = end - start;
+            int notated = count < num ? num : count;   // a short tail pads with a rest
+            measures->push_back({ start, end, count, den, notated, den, false });
+            start = end;
+        }
     }
     if (measures->size() >= 2) {
         NotMeasure &       first     = (*measures)[0];

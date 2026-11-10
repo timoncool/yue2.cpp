@@ -1,3 +1,7 @@
+# test-notation: measure inference from decoded beats, pure CPU, no ggml.
+add_executable(test-notation test-notation.cpp)
+target_include_directories(test-notation PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
 # test-vae: Oobleck VAE decoder parity harness against the torch reference.
 add_executable(test-vae test-vae.cpp)
 link_ggml_backends(test-vae)
