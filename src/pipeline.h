@@ -51,6 +51,7 @@ struct Yue2PipelineParams {
     int  vae_core   = 512;                // VAE tile core frames
     int  vae_halo   = 16;                 // VAE tile halo frames
     int  nar_chunk  = 0;                  // acoustic chunk frame cap, 0 = what the context holds
+    int  nar_halo   = 0;                  // frames a later chunk solves before its fade and drops, 0 = the fade alone
 
     const char * dump_dir     = nullptr;  // probe dumps of the first track for the cossim harness
 };
@@ -913,7 +914,10 @@ static bool pipeline_generate(Yue2Pipeline *          p,
         // A chunk after the first begins `overlap` frames before the one ahead of it ends, solves them again from
         // the same noise and fades into them, so the song does not break where one chunk meets the next
         const int overlap    = T_lat > chunk_size ? std::min(chunk_size / 4, 2 * YUE2_FRAME_RATE) : 0;
-        const int stride     = chunk_size - overlap;
+        // A halo lets a later chunk hear the song for longer before the fade: it solves `lead` frames that were
+        // already solved, keeps only the last `overlap` of them for the fade and drops the rest
+        const int lead       = T_lat > chunk_size ? std::max(overlap, std::min(p->params.nar_halo, chunk_size / 2)) : 0;
+        const int stride     = chunk_size - lead;
         const int chunks     = T_lat <= chunk_size ? 1 : 1 + (T_lat - chunk_size + stride - 1) / stride;
         fprintf(stderr, "[NAR] Song %d: %d frames (%.1f s), prefix %d, %d chunk%s of %d, %d variation%s\n", i, T_lat,
                 (float) T_lat / (float) YUE2_FRAME_RATE, prefix_len, chunks, chunks > 1 ? "s" : "", chunk_size, M,
@@ -976,10 +980,11 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                            solver)) {
                 return false;
             }
-            const int fade = chunk > 0 ? overlap : 0;
+            const int fade    = chunk > 0 ? overlap : 0;
+            const int dropped = chunk > 0 ? lead - overlap : 0;
             for (int j = 0; j < M; j++) {
-                float *       to     = (*songs)[(size_t) i * M + j].latents.data() + (size_t) start * YUE2_LATENT_DIM;
-                const float * solved = block.data() + span * j;
+                float * to = (*songs)[(size_t) i * M + j].latents.data() + (size_t) (start + dropped) * YUE2_LATENT_DIM;
+                const float * solved = block.data() + span * j + (size_t) dropped * YUE2_LATENT_DIM;
                 for (int t = 0; t < fade; t++) {
                     const float w = ((float) t + 0.5f) / (float) fade;
                     for (int d = 0; d < YUE2_LATENT_DIM; d++) {
@@ -988,7 +993,7 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                     }
                 }
                 memcpy(to + (size_t) fade * YUE2_LATENT_DIM, solved + (size_t) fade * YUE2_LATENT_DIM,
-                       (size_t) (frames - fade) * YUE2_LATENT_DIM * sizeof(float));
+                       (size_t) (frames - dropped - fade) * YUE2_LATENT_DIM * sizeof(float));
             }
             fprintf(stderr, "[NAR] Song %d chunk %d/%d: %d frames, cache %d rows, %d forwarded, %.1f s\n", i,
                     chunk + 1, chunks, frames, ar_len, ar_len - kept, chunk_timer.ms() / 1000.0);

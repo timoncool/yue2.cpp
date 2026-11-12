@@ -821,6 +821,7 @@ static void print_usage(const char * prog) {
             "  --vae-core <N>         VAE tile core frames (default: 512)\n"
             "  --vae-halo <N>         VAE tile halo frames (default: 16)\n"
             "  --nar-chunk <N>        Acoustic chunk frame cap (default: what the context holds)\n"
+            "  --nar-halo <N>         Frames a later chunk solves before its fade (default: the fade alone)\n"
             "  --no-fa                Disable flash attention\n"
             "  --clamp-fp16           Clamp hidden states to FP16 range\n",
             prog);
@@ -872,6 +873,8 @@ int main(int argc, char ** argv) {
             params.vae_halo = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--nar-chunk") && !last) {
             params.nar_chunk = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--nar-halo") && !last) {
+            params.nar_halo = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--no-fa")) {
             params.no_fa = true;
         } else if (!strcmp(argv[i], "--clamp-fp16")) {
