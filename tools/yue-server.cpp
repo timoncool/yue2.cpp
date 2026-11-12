@@ -26,6 +26,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -714,7 +715,7 @@ static void print_usage(const char * prog) {
             "  --host <addr>          Listen address (default: 0.0.0.0)\n"
             "  --port <N>             Listen port (default: 8087)\n"
             "  --max-batch <N>        Song batch limit, one KV set each (default: 1)\n"
-            "  --keep-loaded          Keep every model resident in VRAM (default: evict between stages)\n"
+            "  --keep-loaded          Keep every model resident in VRAM (default: evict between stages; POST /evict unloads them)\n"
             "\n"
             "Debug:\n"
             "  --max-seq <N>          KV cache size (default: model context)\n"
@@ -827,6 +828,23 @@ int main(int argc, char ** argv) {
     svr.Get("/props", handle_props);
 
     svr.Get("/logs", handle_logs);
+
+    // Unloads every model no job holds. It runs in the work queue, so it never
+    // meets a job half way; the next request loads what it needs again.
+    svr.Post("/evict", [](const httplib::Request &, httplib::Response & res) {
+        auto                                done   = std::make_shared<std::promise<std::pair<size_t, int>>>();
+        std::future<std::pair<size_t, int>> result = done->get_future();
+        work_push([done] {
+            size_t freed = store_evict_idle(g_pipeline.store);
+            done->set_value({ freed, store_gpu_module_count(g_pipeline.store) });
+        });
+        std::pair<size_t, int> evicted  = result.get();
+        double                 freed_mb = (double) evicted.first / (1024.0 * 1024.0);
+        fprintf(stderr, "[Server] Evict: %.1f MB freed, %d modules left\n", freed_mb, evicted.second);
+        char body[96];
+        snprintf(body, sizeof(body), "{\"freed_mb\":%.1f,\"modules\":%d}", freed_mb, evicted.second);
+        res.set_content(body, "application/json");
+    });
 
     svr.Post("/synth", [](const httplib::Request & req, httplib::Response & res) {
         Yue2Request request;
