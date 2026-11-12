@@ -110,6 +110,11 @@ AudioTokenizer * store_require_atok(ModelStore * s, const ModelKey & k);
 // must not be used: in EVICT_STRICT it may be unloaded immediately.
 void store_release(ModelStore * s, void * handle);
 
+// Unloads every GPU module no pipeline holds (refcount 0), whatever the
+// policy: a store kept loaded gives its memory back on request. Returns the
+// bytes freed. Called from the worker thread, as every store call.
+size_t store_evict_idle(ModelStore * s);
+
 // CPU-resident accessor. Loaded on first call, kept forever, never
 // evicted: the tokenizer travels with the backbone GGUF metadata (a few
 // MB). Returns NULL on load failure.
