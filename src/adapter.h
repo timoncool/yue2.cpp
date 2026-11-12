@@ -34,8 +34,9 @@
 // Operations per tensor:
 //   LoRA   W += s * (alpha / rank) * B @ A      alpha from a per tensor
 //                                               .alpha, then __metadata__
-//                                               alpha, then adapter_config.json,
-//                                               else rank
+//                                               alpha (plain, or inside
+//                                               yue2_lora_meta), then
+//                                               adapter_config.json, else rank
 //   LoKr   W += s * (alpha / dim) * kron(w1, W2), scale 1 for a monolithic w2
 //   diff   W += s * D                           ComfyUI .diff / .diff_b
 //   full   W  = W + s * (F - W)                 whole replacement weights
@@ -391,6 +392,32 @@ static std::map<std::string, std::string> adapter_read_metadata(const STFile & s
     return out;
 }
 
+
+// alpha of the whole file from its __metadata__: the plain "alpha" entry, or the
+// "alpha" of the JSON document a trainer stored under "yue2_lora_meta"; 0 when
+// neither names one
+static float adapter_metadata_alpha(const std::map<std::string, std::string> & meta) {
+    auto plain = meta.find("alpha");
+    if (plain != meta.end()) {
+        float alpha = (float) atof(plain->second.c_str());
+        if (alpha > 0.0f) {
+            return alpha;
+        }
+    }
+    auto nested = meta.find("yue2_lora_meta");
+    if (nested == meta.end()) {
+        return 0.0f;
+    }
+    yyjson_doc * doc = yyjson_read(nested->second.c_str(), nested->second.size(), 0);
+    if (!doc) {
+        return 0.0f;
+    }
+    yyjson_val * v     = yyjson_obj_get(yyjson_doc_get_root(doc), "alpha");
+    float        alpha = (v && yyjson_is_num(v)) ? (float) yyjson_get_num(v) : 0.0f;
+    yyjson_doc_free(doc);
+    return alpha > 0.0f ? alpha : 0.0f;
+}
+
 // What an adapter_config.json beside the weights says about the scale: its
 // lora_alpha (or alpha), 0 when absent, and whether it trained rank-stabilised
 // (use_rslora), whose scale is alpha / sqrt(rank) instead of alpha / rank
@@ -687,7 +714,10 @@ static bool adapter_collect(const std::string &                               fi
         return false;
     }
     auto  meta       = adapter_read_metadata(st);
-    float meta_alpha = meta.count("alpha") ? (float) atof(meta["alpha"].c_str()) : 0.0f;
+    float meta_alpha = adapter_metadata_alpha(meta);
+    if (meta_alpha > 0.0f) {
+        fprintf(stderr, "[Adapter] %s: alpha %g from its metadata\n", file.c_str(), (double) meta_alpha);
+    }
     float lokr_dim   = meta.count("lokr_dim") ? (float) atof(meta["lokr_dim"].c_str()) : 0.0f;
 
     // group the keys of this half by module and target
