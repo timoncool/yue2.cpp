@@ -767,6 +767,28 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                 semantic.min_tokens = semantic.max_tokens;
             }
         }
+        // A budget the context cannot hold after the prompt and the score
+        // shrinks to the room left: the song ends there, truncated
+        for (int i = 0; i < B; i++) {
+            int longest = (int) prefixes[i].size();
+            if (!negatives.empty() && (int) negatives[i].size() > longest) {
+                longest = (int) negatives[i].size();
+            }
+            int room = p->context - longest - 1;
+            if (room >= semantic.max_tokens) {
+                continue;
+            }
+            if (room < std::max(1, semantic.min_tokens)) {
+                fprintf(stderr,
+                        "[Pipeline] FATAL: the prompt and the score take %d of the model's %d tokens, so a song can "
+                        "last %.0f s and %.0f s were asked for\n",
+                        longest, p->context, room > 0 ? room / (double) YUE2_FRAME_RATE : 0.0,
+                        std::max(1, semantic.min_tokens) / (double) YUE2_FRAME_RATE);
+                return false;
+            }
+            fprintf(stderr, "[AR] Frame budget clamped to %d by the KV cache (prompt %d tokens)\n", room, longest);
+            semantic.max_tokens = room;
+        }
         if (resume && (int) carried.size() >= semantic.max_tokens) {
             fprintf(stderr, "[Pipeline] FATAL: the song already has %zu frames, the length asked for holds %d\n",
                     carried.size(), semantic.max_tokens);
@@ -781,15 +803,6 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                 longest = (int) negatives[i].size();
             }
             int semantic_need = longest + semantic.max_tokens + 1;
-            if (semantic_need > p->context) {
-                int room = p->context - longest - 1;
-                fprintf(stderr,
-                        "[Pipeline] FATAL: the prompt and the score take %d of the model's %d tokens, so a song can "
-                        "last %.0f s and %.0f s were asked for\n",
-                        longest, p->context, room > 0 ? room / (double) YUE2_FRAME_RATE : 0.0,
-                        semantic.max_tokens / (double) YUE2_FRAME_RATE);
-                return false;
-            }
             int acoustic_need = (int) prefixes[i].size() + 2 * semantic.max_tokens + 3;
             need              = std::max(need, std::max(semantic_need, acoustic_need));
         }
