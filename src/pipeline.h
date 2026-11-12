@@ -1009,6 +1009,8 @@ static bool pipeline_generate(Yue2Pipeline *          p,
     for (size_t t = 0; t < songs->size(); t++) {
         Yue2Song & song = (*songs)[t];
         fprintf(stderr, "[VAE] Track %zu/%zu: song %zu variation %zu\n", t + 1, songs->size(), t / M, t % M);
+        float_stats_print("[NAR] Check", "song latents after the chunks",
+                          float_stats(song.latents.data(), song.latents.size()));
         if (!pipeline_decode(p, vae, song.latents.data(), song.T_lat, &song.audio, &song.T_audio, cancelled,
                              cancel_data)) {
             return false;

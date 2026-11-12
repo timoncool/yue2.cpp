@@ -22,6 +22,7 @@
 #pragma once
 
 #include "debug.h"
+#include "float-check.h"
 #include "flow-solver.h"
 #include "qwen3-lm.h"
 #include "timer.h"
@@ -519,7 +520,11 @@ static bool nar_velocity(Yue2NAR *            n,
     nar_time_features(nar_shift_t(n, raw_t), feats);
     ggml_backend_tensor_set(n->in_time, feats, 0, sizeof(feats));
 
-    ggml_backend_sched_graph_compute(n->sched, n->graph);
+    const enum ggml_status status = ggml_backend_sched_graph_compute(n->sched, n->graph);
+    if (status != GGML_STATUS_SUCCESS) {
+        fprintf(stderr, "[NAR] FATAL: graph compute failed (status %d) for T_lat=%d\n", (int) status, T_lat);
+        return false;
+    }
     ggml_backend_tensor_get(n->out_v, v_out, 0, block * M * sizeof(float));
     return true;
 }
@@ -569,6 +574,7 @@ static bool nar_solve(Yue2NAR *            n,
     int    evaluations = 0;
     int    current     = 0;
     bool   opening     = true;
+    bool   reported    = false;
     Timer  step_timer;
 
     debug_dump_2d(dbg, "noise", state, T_lat, n->latent_dim);
@@ -580,6 +586,14 @@ static bool nar_solve(Yue2NAR *            n,
         }
         if (!nar_velocity(n, kv, x, T_lat, M, ar_len, kv_set, nar_logit_clamped(t), out)) {
             return false;
+        }
+        if (!reported) {
+            const FloatStats s = float_stats(out, count);
+            if (float_stats_bad(s)) {
+                snprintf(name, sizeof(name), "velocity at step %d, evaluation %d", current, evaluations);
+                float_stats_print("[NAR] Check FAILED", name, s);
+                reported = true;
+            }
         }
         if (dbg->enabled && evaluations == 0) {
             nar_dump_named(n, dbg);
@@ -607,6 +621,7 @@ static bool nar_solve(Yue2NAR *            n,
         return false;
     }
     debug_dump_2d(dbg, "nar_x0", state, T_lat, n->latent_dim);
+    float_stats_print("[NAR] Check", "solved latents", float_stats(state, count));
 
     fprintf(stderr, "[NAR] Solved: T_lat=%d, %d variations, %d steps (%s, %d evaluations), %.0f ms (%.1f ms/step)\n",
             T_lat, M, steps, solver == YUE2_SOLVER_AB2 ? "ab2" : "midpoint", evaluations, solve_timer.ms(),

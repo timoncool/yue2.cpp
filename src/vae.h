@@ -10,6 +10,7 @@
 
 #pragma once
 #include "backend.h"
+#include "float-check.h"
 #include "ggml-backend.h"
 #include "ggml.h"
 #include "gguf-weights.h"
@@ -434,7 +435,11 @@ static int vae_ggml_compute(VAEGGML *     m,
     }
     ggml_backend_tensor_set(m->graph_input, m->scratch_in.data(), 0, in_size * sizeof(float));
 
-    ggml_backend_sched_graph_compute(m->sched, m->graph);
+    const enum ggml_status status = ggml_backend_sched_graph_compute(m->sched, m->graph);
+    if (status != GGML_STATUS_SUCCESS) {
+        fprintf(stderr, "[VAE] FATAL: graph compute failed (status %d) for T=%d at %d\n", (int) status, T_latent, win_start);
+        return -1;
+    }
 
     return (int) m->graph_output->ne[0];
 }
@@ -455,6 +460,11 @@ static int vae_ggml_decode(VAEGGML * m, const float * latent, int T_latent, floa
     }
 
     ggml_backend_tensor_get(m->graph_output, audio_out, 0, T_out * 2 * sizeof(float));
+    const FloatStats out = float_stats(audio_out, (size_t) T_out * 2);
+    if (float_stats_bad(out)) {
+        float_stats_print("[VAE] Check FAILED", "latents", float_stats(latent, (size_t) T_latent * 64));
+        float_stats_print("[VAE] Check FAILED", "audio", out);
+    }
 
     fprintf(stderr, "[VAE] Decoded: T_latent=%d -> T_audio=%d (%.2fs @ 48kHz), %.0f ms\n", T_latent, T_out,
             (float) T_out / 48000.0f, decode_timer.ms());
@@ -490,6 +500,7 @@ static int vae_ggml_decode_tiled(VAEGGML *     m,
 
     fprintf(stderr, "[VAE] Tiled decode: %d tiles (core=%d, halo=%d)\n", num_tiles, core_frames, halo_frames);
     Timer decode_timer;
+    bool  reported = false;
 
     for (int i = 0; i < num_tiles; i++) {
         if (cancel && cancel(cancel_data)) {
@@ -521,6 +532,24 @@ static int vae_ggml_decode_tiled(VAEGGML *     m,
         ggml_backend_tensor_get(m->graph_output, audio_out + out_start, crop * sizeof(float), core_len * sizeof(float));
         ggml_backend_tensor_get(m->graph_output, audio_out + max_T_audio + out_start, (tile_T + crop) * sizeof(float),
                                 core_len * sizeof(float));
+        if (!reported) {
+            const FloatStats in = float_stats(latent + (size_t) left * 64, (size_t) (right - left) * 64);
+            FloatStats       out = float_stats(audio_out + out_start, (size_t) core_len);
+            const FloatStats right_ch = float_stats(audio_out + max_T_audio + out_start, (size_t) core_len);
+            out.count += right_ch.count;
+            out.nans += right_ch.nans;
+            out.infs += right_ch.infs;
+            out.zeros += right_ch.zeros;
+            out.abs_sum += right_ch.abs_sum;
+            if (float_stats_bad(in) || float_stats_bad(out)) {
+                char where[64];
+                snprintf(where, sizeof(where), "tile %d/%d latents [%d, %d)", i + 1, num_tiles, left, right);
+                float_stats_print("[VAE] Check FAILED", where, in);
+                snprintf(where, sizeof(where), "tile %d/%d audio", i + 1, num_tiles);
+                float_stats_print("[VAE] Check FAILED", where, out);
+                reported = true;
+            }
+        }
     }
 
     // Compact ch1 from offset max_T_audio to offset total
