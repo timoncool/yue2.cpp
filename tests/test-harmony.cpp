@@ -123,6 +123,45 @@ int main() {
         check(near(out[(size_t) id_of("%")], -YUE2_FOLLOW_BOOST), "no third \"%\" line");
         check(near(out[(size_t) END], 0.0f), "the plan may end");
     }
+    {  // a progression: a chord symbol opened in a section spells that section's next chord
+        Yue2Harmony h;
+        h.progressions       = { { "verse", { "C", "G" } }, { "*", { "Am" } } };
+        check(yue2_harmony_valid(h), "progressions are valid");
+        Yue2HarmonyPlan    plan = yue2_harmony_plan(h, &VOCAB, END);
+        Yue2HarmonyState   st;
+        std::vector<int>   tokens;
+        std::vector<float> logits((size_t) END + 1, 0.0f), out;
+        feed(plan, &st, &tokens, { "K:C\n" });
+        check(yue2_harmony_apply(plan, &st, logits.data(), END + 1, 64, &out), "before a section the \"*\" list steers");
+        check(near(out[(size_t) id_of("\"Am\"")], 0.0f), "Am is the chord of any section");
+        check(near(out[(size_t) id_of("\"C\"")], -YUE2_FOLLOW_BOOST), "C is not");
+        feed(plan, &st, &tokens, { "% verse\n" });
+        check(st.section_name == "verse", "the section is named");
+        check(yue2_harmony_apply(plan, &st, logits.data(), END + 1, 64, &out), "the verse steers");
+        check(near(out[(size_t) id_of("\"C\"")], 0.0f), "the verse opens on C");
+        check(near(out[(size_t) id_of("\"G\"")], -YUE2_FOLLOW_BOOST), "G is second, not first");
+        check(near(out[(size_t) id_of("\"Am\"")], -YUE2_FOLLOW_BOOST), "Am is not in the verse");
+        check(near(out[(size_t) id_of("z16|")], 0.0f), "notes are the planner's");
+        feed(plan, &st, &tokens, { "\"C\"", "z16|" });
+        check(yue2_harmony_apply(plan, &st, logits.data(), END + 1, 64, &out), "the second chord");
+        check(near(out[(size_t) id_of("\"G\"")], 0.0f), "G follows C");
+        check(near(out[(size_t) id_of("\"C\"")], -YUE2_FOLLOW_BOOST), "C does not repeat");
+        feed(plan, &st, &tokens, { "\"" });
+        check(yue2_harmony_apply(plan, &st, logits.data(), END + 1, 64, &out), "inside a symbol");
+        check(near(out[(size_t) id_of("G")], YUE2_FOLLOW_BOOST), "an open symbol is spelled G");
+        check(near(out[(size_t) id_of("C")], 0.0f), "and not C");
+        feed(plan, &st, &tokens, { "G", "\"", "z16|" });
+        check(st.section_chords == 2, "two chords in the verse");
+        check(yue2_harmony_apply(plan, &st, logits.data(), END + 1, 64, &out), "the list starts over");
+        check(near(out[(size_t) id_of("\"C\"")], 0.0f), "C again after G");
+        feed(plan, &st, &tokens, { "\n", "% chorus\n" });
+        check(yue2_harmony_apply(plan, &st, logits.data(), END + 1, 64, &out), "a section without a list");
+        check(near(out[(size_t) id_of("\"Am\"")], 0.0f), "takes the \"*\" list");
+        h.progressions = { { "verse", { "x" } } };
+        check(!yue2_harmony_valid(h), "a symbol starts with its root");
+        h.progressions = { { "verse", {} } };
+        check(!yue2_harmony_valid(h), "an empty list is no progression");
+    }
     {  // off changes nothing
         Yue2HarmonyPlan    plan = yue2_harmony_plan(Yue2Harmony(), &VOCAB, END);
         Yue2HarmonyState   st;

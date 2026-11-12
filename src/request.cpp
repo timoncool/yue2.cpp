@@ -246,9 +246,38 @@ static bool request_parse_harmony(yyjson_val * node, Yue2Harmony * h) {
             h->follow.push_back(lower);
         }
     }
+    if ((v = yyjson_obj_get(node, "chords"))) {
+        if (!yyjson_is_obj(v)) {
+            return fail("chords must be an object of section names with their chord symbols");
+        }
+        h->progressions.clear();
+        size_t       i, max;
+        yyjson_val * key;
+        yyjson_val * list;
+        yyjson_obj_foreach(v, i, max, key, list) {
+            if (!yyjson_is_arr(list)) {
+                return fail("chords must be an object of section names with their chord symbols");
+            }
+            std::string lower = yy_str(key);
+            for (char & c : lower) {
+                c = (char) std::tolower((unsigned char) c);
+            }
+            std::vector<std::string> symbols;
+            size_t                   j, count;
+            yyjson_val *             symbol;
+            yyjson_arr_foreach(list, j, count, symbol) {
+                if (!yyjson_is_str(symbol)) {
+                    return fail("chords must be an object of section names with their chord symbols");
+                }
+                symbols.push_back(yy_str(symbol));
+            }
+            h->progressions.push_back({ lower, symbols });
+        }
+    }
     if (!yue2_harmony_valid(*h)) {
         return fail("is out of bounds: strength 0-64, window 1-512, hold_limit 0-64, outside_bonus 0-20, "
-                    "outside_limit 0-1, section_strength 0-64, section_open 1-16, up to 64 section names");
+                    "outside_limit 0-1, section_strength 0-64, section_open 1-16, up to 64 section names, chords of "
+                    "up to 64 sections with 1-64 symbols each, a symbol starting with its root A-G");
     }
     return true;
 }
@@ -544,6 +573,18 @@ std::string request_to_json(const Yue2Request * r, bool sparse) {
             yyjson_mut_arr_add_strncpy(doc, names, name.c_str(), name.size());
         }
         yyjson_mut_obj_add_val(doc, node, "follow", names);
+        if (!h.progressions.empty()) {
+            yyjson_mut_val * chords = yyjson_mut_obj(doc);
+            for (const auto & progression : h.progressions) {
+                yyjson_mut_val * symbols = yyjson_mut_arr(doc);
+                for (const std::string & symbol : progression.second) {
+                    yyjson_mut_arr_add_strncpy(doc, symbols, symbol.c_str(), symbol.size());
+                }
+                yyjson_mut_obj_add(chords, yyjson_mut_strncpy(doc, progression.first.c_str(), progression.first.size()),
+                                   symbols);
+            }
+            yyjson_mut_obj_add_val(doc, node, "chords", chords);
+        }
         yyjson_mut_obj_add_val(doc, root, "harmony", node);
     }
 

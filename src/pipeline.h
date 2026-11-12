@@ -655,10 +655,12 @@ static bool pipeline_generate(Yue2Pipeline *          p,
             texts   = bpe_decode_each(tok, YUE2_EOD);
             harmony = yue2_harmony_plan(r.harmony, &texts, YUE2_ABC_END);
             fprintf(stderr,
-                    "[Harmony] %s strength=%.2f window=%d hold=%d outside=%.2f/%.2f section=%.2f/%d follow=%zu\n",
+                    "[Harmony] %s strength=%.2f window=%d hold=%d outside=%.2f/%.2f section=%.2f/%d follow=%zu "
+                    "chords=%zu\n",
                     r.harmony.by_root ? "root" : "spelling", (double) r.harmony.strength, r.harmony.window,
                     r.harmony.hold_limit, (double) r.harmony.outside_bonus, (double) r.harmony.outside_limit,
-                    (double) r.harmony.section_strength, r.harmony.section_open, r.harmony.follow.size());
+                    (double) r.harmony.section_strength, r.harmony.section_open, r.harmony.follow.size(),
+                    r.harmony.progressions.size());
         }
         if (!yue2_generate(lm, &p->kv, std::vector<std::vector<int>>(B, open), {}, 1.0f, abc_sampling, r.lm_seed,
                            YUE2_PHASE_ABC, &plans, cancelled, cancel_data, nullptr,

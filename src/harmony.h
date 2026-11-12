@@ -21,6 +21,11 @@
 //                     is used no further "%" line may start, and the plan may
 //                     not end before every section has begun and the last
 //                     has a few chords
+//   progressions      the chords a section is written over, by section name:
+//                     a chord symbol opened in that section may only spell
+//                     the next chord of its list, which starts over at its
+//                     end and at each "% name" line; where and how often a
+//                     symbol stands, and every note, stay the planner's
 // Only the best candidates of a step are scored, as many as the top-k cut
 // keeps and never fewer than 64: a penalty only lowers a token, so one outside
 // them could not be drawn either way. The bonus can raise one, so the tokens
@@ -45,10 +50,13 @@ struct Yue2Harmony {
     float                    section_strength = 0.0f;   // logits against copying the previous section's opening
     int                      section_open     = 4;      // opening chords compared between sections
     std::vector<std::string> follow;                    // section names in order, lower case; empty is off
+    // chord symbols a section writes, in order and over again, by section name in lower case; "*" is every
+    // section without a list of its own, and the bars before the first section
+    std::vector<std::pair<std::string, std::vector<std::string>>> progressions;
 
     bool chords() const { return strength > 0.0f || outside_bonus > 0.0f || section_strength > 0.0f; }
 
-    bool active() const { return chords() || !follow.empty(); }
+    bool active() const { return chords() || !follow.empty() || !progressions.empty(); }
 };
 
 // Logits given to the tokens that spell the section asked for next, taken from
@@ -82,6 +90,23 @@ static bool yue2_harmony_valid(const Yue2Harmony & h) {
     for (const std::string & name : h.follow) {
         if (!yue2_section_name_valid(name)) {
             return false;
+        }
+    }
+    if (h.progressions.size() > 64) {
+        return false;
+    }
+    for (const auto & progression : h.progressions) {
+        if (progression.first != "*" && !yue2_section_name_valid(progression.first)) {
+            return false;
+        }
+        if (progression.second.empty() || progression.second.size() > 64) {
+            return false;
+        }
+        for (const std::string & symbol : progression.second) {
+            if (symbol.empty() || symbol.size() > 24 || symbol[0] < 'A' || symbol[0] > 'G' ||
+                symbol.find_first_of("\"\n") != std::string::npos) {
+                return false;
+            }
         }
     }
     return true;
@@ -177,6 +202,7 @@ struct Yue2HarmonyState {
     int                      held           = 0;  // symbols in a row on last_root
     int                      section_count  = 0;  // "% name" lines finished
     int                      section_chords = 0;  // chord symbols since the last one
+    std::string              section_name;        // the last one's name in lower case, empty before the first
     std::vector<int>         opening;             // roots this section moved through, up to section_open
     std::vector<int>         previous;            // the same for the section before
     std::vector<std::string> closed;              // scratch
@@ -235,6 +261,24 @@ static bool yue2_section_line(const std::string & line) {
     return b > a && yue2_section_name_valid(line.substr(a, b - a));
 }
 
+
+// The name of a section comment in lower case, "% Verse " is "verse"
+static std::string yue2_section_name(const std::string & line) {
+    size_t a = 1;
+    while (a < line.size() && line[a] == ' ') {
+        a++;
+    }
+    size_t b = line.size();
+    while (b > a && line[b - 1] == ' ') {
+        b--;
+    }
+    std::string name = line.substr(a, b - a);
+    for (char & c : name) {
+        c = (char) std::tolower((unsigned char) c);
+    }
+    return name;
+}
+
 // Reads the tokens drawn since the last call
 static void yue2_harmony_feed(const Yue2HarmonyPlan & plan, Yue2HarmonyState * st, const std::vector<int> & tokens) {
     const std::vector<std::string> & texts = *plan.texts;
@@ -262,6 +306,7 @@ static void yue2_harmony_feed(const Yue2HarmonyPlan & plan, Yue2HarmonyState * s
                 st->opening.clear();
                 st->section_count++;
                 st->section_chords = 0;
+                st->section_name   = yue2_section_name(st->line);
             }
             st->line.clear();
         }
@@ -440,6 +485,80 @@ static void yue2_harmony_follow(const Yue2HarmonyPlan &                    plan,
     }
 }
 
+
+// The progression of the section being written, nullptr when it has none
+static const std::vector<std::string> * yue2_harmony_wanted(const Yue2Harmony & h, const Yue2HarmonyState & st) {
+    const std::vector<std::string> * any = nullptr;
+    for (const auto & progression : h.progressions) {
+        if (progression.first == st.section_name) {
+            return &progression.second;
+        }
+        if (progression.first == "*") {
+            any = &progression.second;
+        }
+    }
+    return any;
+}
+
+// The progression's costs of this step: inside a chord symbol the tokens that
+// spell the section's next chord gain, and a candidate that would open or
+// close another chord loses. Symbols that are no chords ("^text") are left
+// alone, and so is where a symbol stands.
+static void yue2_harmony_progress(const Yue2HarmonyPlan &              plan,
+                                  Yue2HarmonyState *                   st,
+                                  const std::vector<int> &             top,
+                                  std::vector<std::pair<int, float>> * costs) {
+    const std::vector<std::string> * wanted = yue2_harmony_wanted(plan.cfg, *st);
+    if (!wanted) {
+        return;
+    }
+    auto next_chord = [&](int ahead) -> const std::string & {
+        return (*wanted)[(size_t) (st->section_chords + ahead) % wanted->size()];
+    };
+    auto is_chord = [](const std::string & symbol) { return !symbol.empty() && symbol[0] >= 'A' && symbol[0] <= 'G'; };
+    const Yue2ChordCursor & cursor = st->cursor;
+    if (cursor.inside) {
+        if (!cursor.partial.empty() && !is_chord(cursor.partial)) {
+            return;
+        }
+        std::string target = next_chord(0) + "\"";
+        if (target.compare(0, cursor.partial.size(), cursor.partial) == 0) {
+            for (int id : yue2_harmony_spelling(plan, st, target.substr(cursor.partial.size()))) {
+                costs->push_back({ id, -YUE2_FOLLOW_BOOST });
+            }
+        }
+        return;
+    }
+    std::vector<std::string> closed;
+    for (int id : top) {
+        const std::string & text = (*plan.texts)[(size_t) id];
+        if (text.find('"') == std::string::npos) {
+            continue;
+        }
+        Yue2ChordCursor next = cursor;
+        closed.clear();
+        next.walk(text, &closed);
+        int  ahead = 0;
+        bool fits  = true;
+        for (const std::string & symbol : closed) {
+            if (!is_chord(symbol)) {
+                continue;
+            }
+            if (symbol != next_chord(ahead)) {
+                fits = false;
+                break;
+            }
+            ahead++;
+        }
+        if (fits && next.inside && is_chord(next.partial)) {
+            fits = next_chord(ahead).compare(0, next.partial.size(), next.partial) == 0;
+        }
+        if (!fits) {
+            costs->push_back({ id, YUE2_FOLLOW_BOOST });
+        }
+    }
+}
+
 // Copies the rows logits to out with the costs of this step taken off: the
 // chords among the best n content ids [0, texts) and the structure's tokens.
 // Returns false, out untouched, when nothing changes.
@@ -451,7 +570,7 @@ static bool yue2_harmony_apply(const Yue2HarmonyPlan & plan,
                                std::vector<float> *    out) {
     const Yue2Harmony & h      = plan.cfg;
     bool                chords = h.chords() && !st->changes.empty();
-    if (!chords && h.follow.empty()) {
+    if (!chords && h.follow.empty() && h.progressions.empty()) {
         return false;
     }
     int count = std::min(rows, (int) plan.texts->size());
@@ -483,6 +602,9 @@ static bool yue2_harmony_apply(const Yue2HarmonyPlan & plan,
     }
     if (!h.follow.empty()) {
         yue2_harmony_follow(plan, st, top, &costs);
+    }
+    if (!h.progressions.empty()) {
+        yue2_harmony_progress(plan, st, top, &costs);
     }
     if (costs.empty()) {
         return false;

@@ -137,7 +137,8 @@ struct Yue2Request {
     // chord variety and section order of a planned score, see harmony.h;
     // "harmony": {"identity": "root"|"spelling", "strength", "window",
     // "hold_limit", "outside_bonus", "outside_limit", "section_strength",
-    // "section_open", "follow": ["intro", "verse", ...]}
+    // "section_open", "follow": ["intro", "verse", ...],
+    // "chords": {"verse": ["C", "G", "Am", "F"], "*": [...]}}
     Yue2Harmony harmony;  // off
 
     // continuation: the semantic stream of a source song, its section
