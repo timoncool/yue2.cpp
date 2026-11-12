@@ -580,7 +580,6 @@ static bool nar_solve(Yue2NAR *            n,
     int    evaluations = 0;
     int    current     = 0;
     bool   opening     = true;
-    bool   reported    = false;
     Timer  step_timer;
 
     debug_dump_2d(dbg, "noise", state, T_lat, n->latent_dim);
@@ -593,12 +592,21 @@ static bool nar_solve(Yue2NAR *            n,
         if (!nar_velocity(n, kv, x, T_lat, M, ar_len, kv_set, nar_logit_clamped(t), out)) {
             return false;
         }
-        if (!reported) {
+        // One input does not always come out the same from the device: a
+        // velocity that is not finite is evaluated again before the song fails
+        for (int attempt = 1;; attempt++) {
             const FloatStats s = float_stats(out, count);
-            if (float_stats_bad(s)) {
-                snprintf(name, sizeof(name), "velocity at step %d, evaluation %d", current, evaluations);
-                float_stats_print("[NAR] Check FAILED", name, s);
-                reported = true;
+            if (!float_stats_bad(s)) {
+                break;
+            }
+            snprintf(name, sizeof(name), "velocity at step %d, evaluation %d, attempt %d", current, evaluations, attempt);
+            float_stats_print("[NAR] Check FAILED", name, s);
+            if (attempt == 3) {
+                fprintf(stderr, "[NAR] FATAL: the velocity is not finite at step %d after %d evaluations\n", current, attempt);
+                return false;
+            }
+            if (!nar_velocity(n, kv, x, T_lat, M, ar_len, kv_set, nar_logit_clamped(t), out)) {
+                return false;
             }
         }
         if (dbg->enabled && evaluations == 0) {
@@ -627,7 +635,13 @@ static bool nar_solve(Yue2NAR *            n,
         return false;
     }
     debug_dump_2d(dbg, "nar_x0", state, T_lat, n->latent_dim);
-    float_stats_print("[NAR] Check", "solved latents", float_stats(state, count));
+    const FloatStats solved = float_stats(state, count);
+    float_stats_print("[NAR] Check", "solved latents", solved);
+    if (float_stats_bad(solved)) {
+        fprintf(stderr, "[NAR] FATAL: the solved latents are not audio (%zu NaN, %zu Inf, %zu zeros of %zu) for T_lat=%d\n",
+                solved.nans, solved.infs, solved.zeros, solved.count, T_lat);
+        return false;
+    }
 
     fprintf(stderr, "[NAR] Solved: T_lat=%d, %d variations, %d steps (%s, %d evaluations), %.0f ms (%.1f ms/step)\n",
             T_lat, M, steps, solver == YUE2_SOLVER_AB2 ? "ab2" : "midpoint", evaluations, solve_timer.ms(),

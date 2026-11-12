@@ -464,6 +464,8 @@ static int vae_ggml_decode(VAEGGML * m, const float * latent, int T_latent, floa
     if (float_stats_bad(out)) {
         float_stats_print("[VAE] Check FAILED", "latents", float_stats(latent, (size_t) T_latent * 64));
         float_stats_print("[VAE] Check FAILED", "audio", out);
+        fprintf(stderr, "[VAE] FATAL: the latents decoded to no audio (T=%d)\n", T_latent);
+        return -1;
     }
 
     fprintf(stderr, "[VAE] Decoded: T_latent=%d -> T_audio=%d (%.2fs @ 48kHz), %.0f ms\n", T_latent, T_out,
@@ -500,7 +502,6 @@ static int vae_ggml_decode_tiled(VAEGGML *     m,
 
     fprintf(stderr, "[VAE] Tiled decode: %d tiles (core=%d, halo=%d)\n", num_tiles, core_frames, halo_frames);
     Timer decode_timer;
-    bool  reported = false;
 
     for (int i = 0; i < num_tiles; i++) {
         if (cancel && cancel(cancel_data)) {
@@ -532,7 +533,7 @@ static int vae_ggml_decode_tiled(VAEGGML *     m,
         ggml_backend_tensor_get(m->graph_output, audio_out + out_start, crop * sizeof(float), core_len * sizeof(float));
         ggml_backend_tensor_get(m->graph_output, audio_out + max_T_audio + out_start, (tile_T + crop) * sizeof(float),
                                 core_len * sizeof(float));
-        if (!reported) {
+        {
             const FloatStats in = float_stats(latent + (size_t) left * 64, (size_t) (right - left) * 64);
             FloatStats       out = float_stats(audio_out + out_start, (size_t) core_len);
             const FloatStats right_ch = float_stats(audio_out + max_T_audio + out_start, (size_t) core_len);
@@ -547,7 +548,8 @@ static int vae_ggml_decode_tiled(VAEGGML *     m,
                 float_stats_print("[VAE] Check FAILED", where, in);
                 snprintf(where, sizeof(where), "tile %d/%d audio", i + 1, num_tiles);
                 float_stats_print("[VAE] Check FAILED", where, out);
-                reported = true;
+                fprintf(stderr, "[VAE] FATAL: tile %d/%d decoded to no audio\n", i + 1, num_tiles);
+                return -1;
             }
         }
     }
