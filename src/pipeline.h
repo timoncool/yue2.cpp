@@ -47,6 +47,7 @@ struct Yue2PipelineParams {
     int  max_seq    = 0;                  // 0 = model context, the whole 24576
     int  max_batch  = 1;                  // song batch limit, one KV set per song, two under guidance
     bool no_fa      = false;              // disable flash attention
+    bool kv_q8      = false;              // Q8_0 KV cache, about half the F16 one; needs flash attention on a GPU
     bool clamp_fp16 = false;              // clamp hidden states on sub-Ampere CUDA
     int  vae_core   = 512;                // VAE tile core frames
     int  vae_halo   = 16;                 // VAE tile halo frames
@@ -153,6 +154,16 @@ static bool pipeline_configure(Yue2Pipeline *             p,
     p->context    = cfg.max_seq_len;
     p->kv_backend = backend_init("KV");
     qw3lm_kv_init(&p->kv, cfg, p->kv_backend.backend);
+    if (params.kv_q8) {
+        if (params.no_fa || !p->kv_backend.has_gpu) {
+            fprintf(stderr, "[Pipeline] Q8_0 KV cache needs flash attention on a GPU: the cache stays F16\n");
+        } else if (cfg.head_dim % (int) ggml_blck_size(GGML_TYPE_Q8_0) != 0) {
+            fprintf(stderr, "[Pipeline] Q8_0 KV cache needs a head size in blocks of %d: the cache stays F16\n",
+                    (int) ggml_blck_size(GGML_TYPE_Q8_0));
+        } else {
+            p->kv.type = GGML_TYPE_Q8_0;
+        }
+    }
     p->configured = true;
     return true;
 }

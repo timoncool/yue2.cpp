@@ -296,11 +296,17 @@ static struct ggml_tensor * nar_build_attn(struct ggml_context * ctx,
     k = ggml_cast(ctx, k, GGML_TYPE_F16);
     v = ggml_cast(ctx, v, GGML_TYPE_F16);
 
-    // AR prefix rows in the f16 layout of the cache, repeated per variation
-    struct ggml_tensor * k_ar =
-        ggml_cont(ctx, ggml_view_3d(ctx, cache_k, D, ar_len, Nkv, cache_k->nb[1], cache_k->nb[2], 0));
-    struct ggml_tensor * v_ar =
-        ggml_cont(ctx, ggml_view_3d(ctx, cache_v, D, ar_len, Nkv, cache_v->nb[1], cache_v->nb[2], 0));
+    // AR prefix rows of the cache as f16, repeated per variation. A quantized
+    // cache is read back through f32: the concat below takes one type.
+    struct ggml_tensor * k_ar = ggml_view_3d(ctx, cache_k, D, ar_len, Nkv, cache_k->nb[1], cache_k->nb[2], 0);
+    struct ggml_tensor * v_ar = ggml_view_3d(ctx, cache_v, D, ar_len, Nkv, cache_v->nb[1], cache_v->nb[2], 0);
+    if (cache_k->type == GGML_TYPE_F16) {
+        k_ar = ggml_cont(ctx, k_ar);
+        v_ar = ggml_cont(ctx, v_ar);
+    } else {
+        k_ar = ggml_cast(ctx, ggml_cast(ctx, k_ar, GGML_TYPE_F32), GGML_TYPE_F16);
+        v_ar = ggml_cast(ctx, ggml_cast(ctx, v_ar, GGML_TYPE_F32), GGML_TYPE_F16);
+    }
     if (M > 1) {
         struct ggml_tensor * shape = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, D, ar_len, Nkv, M);
         k_ar                       = ggml_repeat(ctx, k_ar, shape);

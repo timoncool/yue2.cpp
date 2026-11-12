@@ -823,6 +823,7 @@ static void print_usage(const char * prog) {
             "  --nar-chunk <N>        Acoustic chunk frame cap (default: what the context holds)\n"
             "  --nar-halo <N>         Frames a later chunk solves before its fade (default: the fade alone)\n"
             "  --no-fa                Disable flash attention\n"
+            "  --kv-q8                Q8_0 KV cache, about half the memory (GPU with flash attention)\n"
             "  --clamp-fp16           Clamp hidden states to FP16 range\n",
             prog);
 }
@@ -877,6 +878,8 @@ int main(int argc, char ** argv) {
             params.nar_halo = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--no-fa")) {
             params.no_fa = true;
+        } else if (!strcmp(argv[i], "--kv-q8")) {
+            params.kv_q8 = true;
         } else if (!strcmp(argv[i], "--clamp-fp16")) {
             params.clamp_fp16 = true;
         } else {
