@@ -51,6 +51,27 @@ buildvulkan.cmd   # AMD/Intel GPU (Vulkan)
 buildall.cmd      # all backends (CUDA + Vulkan + CPU, runtime loading)
 ```
 
+#### AMD native HIP (ROCm)
+
+`buildhip.cmd` builds the same pipeline on AMD's native HIP runtime instead of
+Vulkan. Install a Windows ROCm SDK that carries device code for your card - the
+[TheRock](https://github.com/ROCm/TheRock) `gfx110X` dist for RDNA3 (RX 7900
+XTX/XT/W7900), from
+[AMD's tarball index](https://stable.repo.amd.com/rocm/core/tarball/) - extract
+it anywhere and point `ROCM_PATH` (or `HIP_PATH`) at the extracted root:
+
+```cmd
+set ROCM_PATH=C:\rocm-gfx110X
+buildhip.cmd      # AMD GPU, native HIP (gfx1100)
+```
+
+The build compiles ggml's CUDA sources through hipcc's HIP layer (Windows CMake
+has no HIP language), so `hipcc` is the C++ compiler for the whole tree with
+MSVC providing headers, libraries and the link step. Run with
+`--device ROCm0` (see `yue-server --help`); the HIP runtime DLLs
+(`amdhip64*.dll`, `hipblas*.dll`, `rocblas*.dll`) must be reachable - copy them
+next to the executable from `%ROCM_PATH%\bin` for a portable setup.
+
 ### Linux / macOS
 
 ```bash
