@@ -184,7 +184,11 @@ if(MSVC)
 else()
     target_compile_options(mp3-codec PRIVATE -Wall -Wextra -Wconversion
                           -Wno-unused-parameter -Wno-unused-function -Wno-sign-conversion)
-    target_link_libraries(mp3-codec PRIVATE m)
+    # libm is its own library on Unix; Windows carries it inside the CRT,
+    # whichever compiler builds the tree (clang under HIP is not MSVC).
+    if(NOT WIN32)
+        target_link_libraries(mp3-codec PRIVATE m)
+    endif()
 endif()
 target_link_libraries(mp3-codec PRIVATE Threads::Threads)
 
