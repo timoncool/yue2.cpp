@@ -3,11 +3,26 @@ setlocal
 
 rem Native Windows ROCm HIP build (gfx1100). Requires the HIP SDK, CMake,
 rem Ninja and MSVC C++ Build Tools. The Studio runtime is native C++ only.
-rem Use the installed Visual Studio toolchain instead of a fixed machine path.
+rem Locate the host toolchain: a VCVARS64 pointing at vcvars64.bat wins,
+rem then a shell that already has cl.exe on PATH, then the Visual Studio
+rem Installer's vswhere.
 
+if not defined VCVARS64 goto vswhere_lookup
+if not exist "%VCVARS64%" goto bad_vcvars_env
+set "VCVARS=%VCVARS64%"
+goto call_vcvars
+
+:bad_vcvars_env
+echo VCVARS64 is set but "%VCVARS64%" does not exist. 1>&2
+exit /b 1
+
+:vswhere_lookup
+where cl >nul 2>nul
+if not errorlevel 1 goto toolchain_ready
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if not exist "%VSWHERE%" (
-    echo Visual Studio Installer vswhere.exe not found. Install Visual Studio C++ Build Tools. 1>&2
+    echo No Visual Studio Installer ^(vswhere.exe^) and no cl.exe on PATH. 1>&2
+    echo Install Visual Studio C++ Build Tools, build from a developer prompt, or set VCVARS64 to vcvars64.bat. 1>&2
     exit /b 1
 )
 for /f "usebackq delims=" %%I in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VS_ROOT=%%I"
@@ -20,8 +35,12 @@ if not exist "%VCVARS%" (
     echo vcvars64.bat not found under "%VS_ROOT%". 1>&2
     exit /b 1
 )
+
+:call_vcvars
 call "%VCVARS%"
 if errorlevel 1 exit /b 1
+
+:toolchain_ready
 
 if not defined ROCM_PATH (
     if defined HIP_PATH (
@@ -41,11 +60,29 @@ if errorlevel 1 (echo CMake is required. 1>&2 & exit /b 1)
 where ninja >nul 2>nul
 if errorlevel 1 (echo Ninja is required. 1>&2 & exit /b 1)
 
-set "CC=clang.exe"
-set "CXX=hipcc.exe"
+rem The host clang ships beside hipcc in official SDKs; TheRock-style dists
+rem keep it under lib\llvm\bin. Resolve it so a bare "clang.exe" on PATH is
+rem never required.
+if exist "%ROCM_PATH%\bin\clang.exe" set "HIP_CLANG=%ROCM_PATH%\bin\clang.exe"
+if not defined HIP_CLANG if exist "%ROCM_PATH%\lib\llvm\bin\clang.exe" set "HIP_CLANG=%ROCM_PATH%\lib\llvm\bin\clang.exe"
+if not defined HIP_CLANG (
+    echo clang.exe not found in "%ROCM_PATH%\bin" or "%ROCM_PATH%\lib\llvm\bin". 1>&2
+    exit /b 1
+)
+
+rem The ggml HIP backend drives hipcc directly on Windows, so the gfx target
+rem must be passed explicitly. Minimal TheRock dists also need the device
+rem library path pointed out; official SDK layouts resolve it themselves.
+if not defined HIP_ARCHS set "HIP_ARCHS=gfx1100"
+set "HIP_CXX_FLAGS=--offload-arch=%HIP_ARCHS%"
+if exist "%ROCM_PATH%\lib\llvm\amdgcn\bitcode" set "HIP_CXX_FLAGS=%HIP_CXX_FLAGS% --rocm-device-lib-path=%ROCM_PATH%/lib/llvm/amdgcn/bitcode"
+
+set "CC=%HIP_CLANG%"
+set "CXX=%ROCM_PATH%\bin\hipcc.exe"
 cmake --fresh -S . -B build-hip -G Ninja -DCMAKE_BUILD_TYPE=Release ^
     -DGGML_HIP=ON -DGGML_CUDA=OFF -DGGML_VULKAN=OFF ^
-    -DGGML_NATIVE=OFF -DGGML_HIP_RCCL=OFF -DGGML_BACKEND_DL=ON
+    -DGGML_NATIVE=OFF -DGGML_HIP_RCCL=OFF -DGGML_BACKEND_DL=ON ^
+    "-DCMAKE_CXX_FLAGS=%HIP_CXX_FLAGS%"
 if errorlevel 1 exit /b 1
 
 cmake --build build-hip --parallel %NUMBER_OF_PROCESSORS%
