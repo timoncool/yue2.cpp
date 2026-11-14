@@ -459,22 +459,22 @@ try {
 # ================================ 5. negative: broken bundles must fail closed
 # Isolated copies only - the bundle under test is never touched.
 foreach ($case in @(
-        @{ Name = 'no-ggml-hip';     Remove = 'ggml-hip.dll' },
-        @{ Name = 'no-amd-comgr';    Remove = 'amd_comgr.dll' },
+        @{ Name = 'no-ggml-hip';     RemoveFile = 'ggml-hip.dll' },
+        @{ Name = 'no-amd-comgr';    RemoveFile = 'amd_comgr.dll' },
         @{ Name = 'no-hip-runtime';  RemovePattern = 'amdhip64*.dll' },
         @{ Name = 'no-kernel-pack';  RemoveDir = 'rocblas' }
     )) {
     $iso = Join-Path $OutputDir ("iso-" + $case.Name)
     if (Test-Path $iso) { Remove-Item $iso -Recurse -Force }
     Copy-Item $EngineRoot $iso -Recurse
-    if ($case.Remove)      { Remove-Item (Join-Path $iso $case.Remove) -Force }
+    if ($case.RemoveFile)  { Remove-Item (Join-Path $iso $case.RemoveFile) -Force }
     if ($case.RemovePattern) { Get-ChildItem $iso -Filter $case.RemovePattern -File | Remove-Item -Force }
     if ($case.RemoveDir)   { if (Test-Path (Join-Path $iso $case.RemoveDir)) { Remove-Item (Join-Path $iso $case.RemoveDir) -Recurse -Force } }
     $neg = $null
     try {
         $neg = Start-Engine -Root $iso -Name $case.Name -PortNumber ($Port + 1)
         if ($neg.Healthy) {
-            Record "negative/$($case.Name)" 'FAIL' "engine still became healthy without $($case.Remove)$($case.RemovePattern)$($case.RemoveDir) (would risk silent fallback)"
+            Record "negative/$($case.Name)" 'FAIL' "engine still became healthy without $($case.RemoveFile)$($case.RemovePattern)$($case.RemoveDir) (would risk silent fallback)"
         } elseif ($neg.Process.HasExited) {
             $last = (($neg.Log -split "`n") | Where-Object { $_ -match 'FATAL|error|ROCm|backend|hip|LoadLibrary|HIP' } | Select-Object -Last 2) -join ' | '
             Record "negative/$($case.Name)" 'PASS' "exit $($neg.Process.ExitCode): $last"
