@@ -79,9 +79,14 @@ if exist "%ROCM_PATH%\lib\llvm\amdgcn\bitcode" set "HIP_CXX_FLAGS=%HIP_CXX_FLAGS
 
 set "CC=%HIP_CLANG%"
 set "CXX=%ROCM_PATH%\bin\hipcc.exe"
+rem OpenMP off: the dist's clang is newer than GGML_OPENMP_FETCH supports, so
+rem the CPU backend would link the MSVC toolset's libomp import and need the
+rem libomp140 runtime DLL beside the engine. ggml's own thread pool drives
+rem the CPU side; every heavy stage runs on the HIP device anyway.
 cmake --fresh -S . -B build-hip -G Ninja -DCMAKE_BUILD_TYPE=Release ^
     -DGGML_HIP=ON -DGGML_CUDA=OFF -DGGML_VULKAN=OFF ^
     -DGGML_NATIVE=OFF -DGGML_HIP_RCCL=OFF -DGGML_BACKEND_DL=ON ^
+    -DGGML_OPENMP=OFF ^
     "-DCMAKE_CXX_FLAGS=%HIP_CXX_FLAGS%"
 if errorlevel 1 exit /b 1
 
