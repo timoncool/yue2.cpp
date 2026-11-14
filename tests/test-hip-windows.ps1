@@ -462,7 +462,7 @@ foreach ($case in @(
         @{ Name = 'no-ggml-hip';     RemoveFile = 'ggml-hip.dll' },
         @{ Name = 'no-amd-comgr';    RemoveFile = 'amd_comgr.dll' },
         @{ Name = 'no-hip-runtime';  RemovePattern = 'amdhip64*.dll' },
-        @{ Name = 'no-kernel-pack';  RemoveDir = 'rocblas' }
+        @{ Name = 'no-kernel-pack';  RemoveDir = 'rocblas'; ExpectJobFailure = $true }
     )) {
     $iso = Join-Path $OutputDir ("iso-" + $case.Name)
     if (Test-Path $iso) { Remove-Item $iso -Recurse -Force }
@@ -473,7 +473,34 @@ foreach ($case in @(
     $neg = $null
     try {
         $neg = Start-Engine -Root $iso -Name $case.Name -PortNumber ($Port + 1)
-        if ($neg.Healthy) {
+        if ($case.ExpectJobFailure) {
+            # Kernel libraries load lazily: startup alone cannot catch a
+            # broken kernel pack. The contract is that a submitted job fails
+            # loudly (or takes the engine down) naming the missing library
+            # and the gfx target - never a done job or a CPU-side result.
+            if (-not $neg.Healthy) {
+                $last = (($neg.Log -split "`n") | Where-Object { $_ -match 'FATAL|error|ROCm|backend|hip|LoadLibrary|HIP' } | Select-Object -Last 2) -join ' | '
+                Record "negative/$($case.Name)" 'PASS' "engine refused to start: $last"
+            } else {
+                $short = @{} + $defaultRequest
+                $short['duration'] = 10.0
+                $body = $short | ConvertTo-Json -Depth 5
+                $sub = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$($Port + 1)/synth" -ContentType 'application/json' -Body $body -TimeoutSec 30
+                $status = 'queued'; $deadline = (Get-Date).AddSeconds(150)
+                while ((Get-Date) -lt $deadline) {
+                    Start-Sleep -Seconds 2
+                    try { $status = (Invoke-RestMethod -Uri "http://127.0.0.1:$($Port + 1)/job?id=$($sub.id)" -TimeoutSec 15).status } catch { $status = 'gone'; break }
+                    if ($status -in @('done', 'failed', 'cancelled')) { break }
+                }
+                $logNow = if (Test-Path $neg.LogPath) { Get-Content -Raw $neg.LogPath } else { $neg.Log }
+                $rocmError = ($logNow -split "`n" | Where-Object { $_ -match 'rocBLAS error|Cannot read.*TensileLibrary|hipblas.*error|HIP error' } | Select-Object -First 1)
+                if ($status -eq 'done' -or -not $rocmError) {
+                    Record "negative/$($case.Name)" 'FAIL' "job ended '$status' without a kernel-library error; the first GEMM must fail, not fake success"
+                } else {
+                    Record "negative/$($case.Name)" 'PASS' "job '$status' with the missing-library error: $($rocmError.Trim())"
+                }
+            }
+        } elseif ($neg.Healthy) {
             Record "negative/$($case.Name)" 'FAIL' "engine still became healthy without $($case.RemoveFile)$($case.RemovePattern)$($case.RemoveDir) (would risk silent fallback)"
         } elseif ($neg.Process.HasExited) {
             $last = (($neg.Log -split "`n") | Where-Object { $_ -match 'FATAL|error|ROCm|backend|hip|LoadLibrary|HIP' } | Select-Object -Last 2) -join ' | '
