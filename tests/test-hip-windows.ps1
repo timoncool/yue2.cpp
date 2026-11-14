@@ -368,7 +368,7 @@ try {
         if ($main.Log -match 'Device 0:\s*(?<g>[^,]+),\s*(?<arch>gfx\d+)') {
             if ($Matches.arch -eq $ExpectArch) {
                 Record 'engine/device-arch' 'PASS' "$($Matches.g.Trim()) ($($Matches.arch)) matches the expected $ExpectArch"
-            } else { Record 'engine/device-arch' 'FAIL' "device is $($Matches.g.Trim()) ($($Matches.arch)), expected $ExpectArch: the bundle's kernels and BLAS libraries must match the card" }
+            } else { Record 'engine/device-arch' 'FAIL' "device is $($Matches.g.Trim()) ($($Matches.arch)), expected ${ExpectArch}: the bundle's kernels and BLAS libraries must match the card" }
         } else { Record 'engine/device-arch' 'FAIL' 'no device enumeration line in the engine log' }
         if ($main.Log -match "loaded ROCm backend from\s*(?<p>[^\r\n]+)ggml-hip\.dll") {
             Record 'engine/hip-backend-applocal' 'PASS' "ggml-hip.dll loaded from $($Matches.p)"
