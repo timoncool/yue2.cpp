@@ -1,8 +1,11 @@
 @echo off
 setlocal
 
-rem Native Windows ROCm HIP build (gfx1100). Requires the HIP SDK, CMake,
-rem Ninja and MSVC C++ Build Tools. The Studio runtime is native C++ only.
+rem Native Windows ROCm HIP build. HIP_ARCHS selects the device target(s):
+rem one gfx id, or a comma list for a multi-target binary. Whatever runtime
+rem will ship beside the engine must carry device and BLAS kernels for every
+rem listed target. Requires the HIP SDK, CMake, Ninja and MSVC C++ Build
+rem Tools. The Studio runtime is native C++ only.
 rem Locate the host toolchain: a VCVARS64 pointing at vcvars64.bat wins,
 rem then a shell that already has cl.exe on PATH, then the Visual Studio
 rem Installer's vswhere.
@@ -71,8 +74,10 @@ if not defined HIP_CLANG (
 )
 
 rem The ggml HIP backend drives hipcc directly on Windows, so the gfx target
-rem must be passed explicitly. Minimal TheRock dists also need the device
-rem library path pointed out; official SDK layouts resolve it themselves.
+rem must be passed explicitly (hipcc otherwise compiles for its own default).
+rem A comma list builds one binary with device code for every target. Minimal
+rem TheRock dists also need the device library path pointed out; official SDK
+rem layouts resolve it themselves.
 if not defined HIP_ARCHS set "HIP_ARCHS=gfx1100"
 set "HIP_CXX_FLAGS=--offload-arch=%HIP_ARCHS%"
 if exist "%ROCM_PATH%\lib\llvm\amdgcn\bitcode" set "HIP_CXX_FLAGS=%HIP_CXX_FLAGS% --rocm-device-lib-path=%ROCM_PATH%/lib/llvm/amdgcn/bitcode"
