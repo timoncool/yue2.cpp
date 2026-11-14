@@ -14,8 +14,8 @@ on:
         description: 'gfx target(s) for --offload-arch, comma-separated'
         default: 'gfx1100'
       ggml_sha:
-        description: 'temporary ggml submodule override until the Windows HIP fixes merge (empty = use the pinned submodule)'
-        default: '39927eae359a6a57118c179e63287d699627fb20'
+        description: 'temporary GGML SHA to test before PR A merges (empty = use the official pinned submodule)'
+        default: ''
 
 jobs:
   build:
@@ -33,7 +33,7 @@ jobs:
         if: env.GGML_SHA != ''
         shell: pwsh
         run: |
-          git -C ggml fetch https://github.com/AIwork4me/ggml.git $env:GGML_SHA
+          git -C ggml fetch https://github.com/openmaster-ai/ggml.git $env:GGML_SHA
           git -C ggml checkout --detach $env:GGML_SHA
           "ggml $(git -C ggml rev-parse HEAD)"
 
