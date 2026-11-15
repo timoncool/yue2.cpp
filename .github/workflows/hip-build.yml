@@ -1,0 +1,82 @@
+name: Windows HIP build
+
+# Compile gate for the native Windows ROCm HIP engine: checks out the tree,
+# downloads a hash-pinned TheRock gfx110X dist and runs buildhip.cmd with a
+# caller-selected gfx target list. No GPU is attached to the runner, so this
+# proves the build (device code compiles and links for every requested
+# target); physical inference is validated separately on real hardware by
+# tests/test-hip-windows.ps1. Manual dispatch only, to keep PR CI cost flat.
+
+on:
+  workflow_dispatch:
+    inputs:
+      archs:
+        description: 'gfx target(s) for --offload-arch, comma-separated'
+        default: 'gfx1100'
+      ggml_sha:
+        description: 'temporary GGML SHA to test before PR A merges (empty = use the official pinned submodule)'
+        default: ''
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      ROCM_PATH: C:\rocm
+      GGML_SHA: ${{ github.event.inputs.ggml_sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Temporary GGML override (until the submodule pin carries the Windows HIP fixes)
+        if: env.GGML_SHA != ''
+        shell: pwsh
+        run: |
+          git -C ggml fetch https://github.com/openmaster-ai/ggml.git $env:GGML_SHA
+          git -C ggml checkout --detach $env:GGML_SHA
+          "ggml $(git -C ggml rev-parse HEAD)"
+
+      - name: Ninja preflight
+        shell: pwsh
+        run: if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) { choco install ninja -y --no-progress }
+
+      - name: ROCm 10.1 gfx110X SDK
+        shell: pwsh
+        run: |
+          $url = 'https://stable.repo.amd.com/rocm/core/tarball/therock-dist-windows-gfx110X-all-10.1.0.tar.gz'
+          curl.exe -L --retry 3 -o D:\therock.tar.gz $url
+          $hash = (Get-FileHash D:\therock.tar.gz -Algorithm SHA256).Hash.ToLower()
+          if ($hash -ne '1313633026b05f8f6af2a6a16a2f323211dd81a904a808f0ee34d2bbfb8f8441') { throw "SDK tarball hash mismatch: $hash" }
+          New-Item -ItemType Directory -Force -Path C:\rocm | Out-Null
+          tar -xzf D:\therock.tar.gz -C C:\rocm
+          Remove-Item D:\therock.tar.gz -Force
+
+      - name: Build the engine (buildhip.cmd)
+        shell: cmd
+        run: |
+          set HIP_ARCHS=${{ github.event.inputs.archs }}
+          echo building device code for %HIP_ARCHS%
+          call buildhip.cmd
+
+      - name: Contract check
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($file in @('build-hip\yue-server.exe', 'build-hip\ggml-hip.dll', 'build-hip\ggml.dll', 'build-hip\ggml-cpu.dll', 'build-hip\ggml-base.dll')) {
+            if (-not (Test-Path $file)) { throw "build output missing: $file" }
+          }
+          # The CPU backend must not gain an OpenMP import: the MSVC toolset's
+          # libomp140 runtime does not travel with the engine (buildhip passes
+          # GGML_OPENMP=OFF for exactly that reason).
+          $dump = & C:\rocm\lib\llvm\bin\llvm-readobj.exe --coff-imports build-hip\ggml-cpu.dll 2>$null | Select-String -SimpleMatch 'libomp'
+          if ($dump) { throw "ggml-cpu.dll imports a libomp runtime: $dump" }
+          'contract ok: engine + HIP backend + DLL closure complete, no libomp import'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yue2-hip-engine-${{ github.event.inputs.archs }}
+          path: |
+            build-hip/yue-server.exe
+            build-hip/*.dll
+          retention-days: 7

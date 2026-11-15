@@ -1,0 +1,54 @@
+name: Windows HIP Harness Policy (no GPU)
+
+# Runs without ROCm, model downloads or physical Radeon hardware.
+# A Windows Code Integrity denial must never count as an engine
+# dependency-failure PASS; this verifies the classifier and script syntax.
+on:
+  push:
+    branches:
+      - fix/native-hip-build-portability
+    paths:
+      - tests/test-hip-windows.ps1
+      - tests/hip-launch-policy.ps1
+      - tests/test-hip-launch-policy.ps1
+      - tests/collect-windows-app-control-evidence.ps1
+      - .github/workflows/hip-harness-tests.yml
+  pull_request:
+    paths:
+      - tests/test-hip-windows.ps1
+      - tests/hip-launch-policy.ps1
+      - tests/test-hip-launch-policy.ps1
+      - .github/workflows/hip-harness-tests.yml
+  workflow_dispatch:
+
+jobs:
+  classify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate PowerShell syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($path in @(
+            'tests/hip-launch-policy.ps1',
+            'tests/test-hip-launch-policy.ps1',
+            'tests/test-hip-windows.ps1',
+            'tests/collect-windows-app-control-evidence.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path).Path, [ref]$tokens, [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -gt 0) {
+              $errors | Format-List | Out-String | Write-Host
+              throw "PowerShell syntax failure in $path"
+            }
+            Write-Host "[syntax PASS] $path"
+          }
+      - name: Classify policy blocks vs real engine failures
+        shell: pwsh
+        run: |
+          & ./tests/test-hip-launch-policy.ps1
+          if ($LASTEXITCODE -ne 0) { throw "No-GPU HIP classification tests failed: $LASTEXITCODE" }
