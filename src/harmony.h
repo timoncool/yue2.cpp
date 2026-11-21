@@ -61,7 +61,7 @@ struct Yue2Harmony {
 
 // Logits given to the tokens that spell the section asked for next, taken from
 // a "%" line past the list and from the end of a plan with sections missing
-static const float YUE2_FOLLOW_BOOST = 50.0f;
+static const float YUE2_FOLLOW_BOOST       = 50.0f;
 // Chord symbols the last section needs before the plan may end
 static const int   YUE2_FOLLOW_LAST_CHORDS = 4;
 
@@ -83,8 +83,8 @@ static bool yue2_section_name_valid(const std::string & name) {
 static bool yue2_harmony_valid(const Yue2Harmony & h) {
     if (!(h.strength >= 0.0f && h.strength <= 64.0f && h.window >= 1 && h.window <= 512 && h.hold_limit >= 0 &&
           h.hold_limit <= 64 && h.outside_bonus >= 0.0f && h.outside_bonus <= 20.0f && h.outside_limit >= 0.0f &&
-          h.outside_limit <= 1.0f && h.section_strength >= 0.0f && h.section_strength <= 64.0f &&
-          h.section_open >= 1 && h.section_open <= 16 && h.follow.size() <= 64)) {
+          h.outside_limit <= 1.0f && h.section_strength >= 0.0f && h.section_strength <= 64.0f && h.section_open >= 1 &&
+          h.section_open <= 16 && h.follow.size() <= 64)) {
         return false;
     }
     for (const std::string & name : h.follow) {
@@ -131,7 +131,7 @@ static int yue2_chord_root(const std::string & symbol) {
 struct Yue2HarmonyPlan {
     Yue2Harmony                      cfg;
     const std::vector<std::string> * texts = nullptr;
-    int                              end   = -1;  // the plan's end token, as a logits index
+    int                              end   = -1;    // the plan's end token, as a logits index
     std::vector<int>                 chord_starts;  // tokens opening a chord symbol: '"' and a root letter
 };
 
@@ -194,10 +194,10 @@ struct Yue2ChordCursor {
 struct Yue2HarmonyState {
     size_t                   seen = 0;
     Yue2ChordCursor          cursor;
-    std::string              line;    // the line being written
-    std::string              head;    // the text up to the K: line, while the key is unknown
-    int                      scale = -1;  // pitch classes of the key as bits, -1 unknown
-    std::vector<std::string> changes;     // identities, oldest first, no two neighbours equal
+    std::string              line;                // the line being written
+    std::string              head;                // the text up to the K: line, while the key is unknown
+    int                      scale = -1;          // pitch classes of the key as bits, -1 unknown
+    std::vector<std::string> changes;             // identities, oldest first, no two neighbours equal
     int                      last_root      = -1;
     int                      held           = 0;  // symbols in a row on last_root
     int                      section_count  = 0;  // "% name" lines finished
@@ -230,7 +230,7 @@ static int yue2_key_scale(const std::string & head) {
             int root = yue2_chord_root(head.substr(k, 2));
             if (root >= 0) {
                 k += (k + 1 < eol && (head[k + 1] == '#' || head[k + 1] == 'b')) ? 2 : 1;
-                bool minor = k < eol && head[k] == 'm' && !(k + 1 < eol && head[k + 1] == 'a');
+                bool             minor          = k < eol && head[k] == 'm' && !(k + 1 < eol && head[k + 1] == 'a');
                 static const int major_steps[7] = { 0, 2, 4, 5, 7, 9, 11 };
                 static const int minor_steps[7] = { 0, 2, 3, 5, 7, 8, 10 };
                 int              bits           = 0;
@@ -260,7 +260,6 @@ static bool yue2_section_line(const std::string & line) {
     }
     return b > a && yue2_section_name_valid(line.substr(a, b - a));
 }
-
 
 // The name of a section comment in lower case, "% Verse " is "verse"
 static std::string yue2_section_name(const std::string & line) {
@@ -424,9 +423,8 @@ static float yue2_harmony_cost(const Yue2HarmonyPlan & plan, Yue2HarmonyState * 
         }
     }
     if (st->closed.empty() && next.inside && root >= 0 && current.compare(0, symbol.size(), symbol) != 0) {
-        cost += yue2_harmony_share(*st, [&](const std::string & c) {
-            return c != current && c.compare(0, symbol.size(), symbol) == 0;
-        });
+        cost += yue2_harmony_share(
+            *st, [&](const std::string & c) { return c != current && c.compare(0, symbol.size(), symbol) == 0; });
     }
     cost *= h.strength;
     if (root >= 0 && (!inside || before.size() <= 1)) {
@@ -456,10 +454,10 @@ static const std::vector<int> & yue2_harmony_spelling(const Yue2HarmonyPlan & pl
 // The structure's costs of this step: the next section's name spelled after a
 // "%", a further "%" line barred once the list is used, and the end barred
 // while sections are missing
-static void yue2_harmony_follow(const Yue2HarmonyPlan &                    plan,
-                                Yue2HarmonyState *                         st,
-                                const std::vector<int> &                   top,
-                                std::vector<std::pair<int, float>> *       costs) {
+static void yue2_harmony_follow(const Yue2HarmonyPlan &              plan,
+                                Yue2HarmonyState *                   st,
+                                const std::vector<int> &             top,
+                                std::vector<std::pair<int, float>> * costs) {
     const std::vector<std::string> & wanted = plan.cfg.follow;
     const std::string &              line   = st->line;
     bool                             listed = st->section_count < (int) wanted.size();
@@ -484,7 +482,6 @@ static void yue2_harmony_follow(const Yue2HarmonyPlan &                    plan,
         costs->push_back({ plan.end, YUE2_FOLLOW_BOOST });
     }
 }
-
 
 // The progression of the section being written, nullptr when it has none
 static const std::vector<std::string> * yue2_harmony_wanted(const Yue2Harmony & h, const Yue2HarmonyState & st) {
@@ -515,7 +512,9 @@ static void yue2_harmony_progress(const Yue2HarmonyPlan &              plan,
     auto next_chord = [&](int ahead) -> const std::string & {
         return (*wanted)[(size_t) (st->section_chords + ahead) % wanted->size()];
     };
-    auto is_chord = [](const std::string & symbol) { return !symbol.empty() && symbol[0] >= 'A' && symbol[0] <= 'G'; };
+    auto is_chord = [](const std::string & symbol) {
+        return !symbol.empty() && symbol[0] >= 'A' && symbol[0] <= 'G';
+    };
     const Yue2ChordCursor & cursor = st->cursor;
     if (cursor.inside) {
         if (!cursor.partial.empty() && !is_chord(cursor.partial)) {
@@ -586,9 +585,9 @@ static bool yue2_harmony_apply(const Yue2HarmonyPlan & plan,
     std::vector<std::pair<int, float>> costs;
     if (chords) {
         std::vector<int> scored = top;
-        if (h.outside_bonus > 0.0f && !st->cursor.inside &&
-            std::any_of(top.begin(), top.end(),
-                        [&](int id) { return (*plan.texts)[(size_t) id].find('"') != std::string::npos; })) {
+        if (h.outside_bonus > 0.0f && !st->cursor.inside && std::any_of(top.begin(), top.end(), [&](int id) {
+                return (*plan.texts)[(size_t) id].find('"') != std::string::npos;
+            })) {
             scored.insert(scored.end(), plan.chord_starts.begin(), plan.chord_starts.end());
             std::sort(scored.begin(), scored.end());
             scored.erase(std::unique(scored.begin(), scored.end()), scored.end());

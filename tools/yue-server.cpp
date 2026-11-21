@@ -189,7 +189,7 @@ struct Job {
     // &track=N fetches one. Guarded by mtx_tracks.
     std::mutex            mtx_tracks;
     std::vector<JobTrack> tracks;
-    const char *          tracks_mime = "audio/wav";
+    const char *          tracks_mime   = "audio/wav";
     bool                  tracks_failed = false;
 
     // memory ordering contract: result_body and result_mime are written
@@ -439,16 +439,16 @@ static void worker_main() {
     }
 }
 
-static Yue2Pipeline g_pipeline;
-static bool         g_keep_loaded = false;
-static std::string  g_model_path;
-static std::string  g_vae_path;
-static std::string  g_vae_decoder_path;
-static std::string  g_transcriber_path;
-static std::string  g_adapters_dir;
-static std::string  g_companion_path;
+static Yue2Pipeline         g_pipeline;
+static bool                 g_keep_loaded = false;
+static std::string          g_model_path;
+static std::string          g_vae_path;
+static std::string          g_vae_decoder_path;
+static std::string          g_transcriber_path;
+static std::string          g_adapters_dir;
+static std::string          g_companion_path;
 static const BPETokenizer * g_tokenizer = nullptr;
-static std::string  g_tokenizer_path;
+static std::string          g_tokenizer_path;
 
 static void on_signal(int) {
     active_job_cancel();
@@ -546,20 +546,22 @@ static void handle_props(const httplib::Request &, httplib::Response & res) {
 
 // The checkpoint tokenizer is loaded before worker threads and stays immutable.
 static void handle_tokenize(const httplib::Request & req, httplib::Response & res) {
-    yyjson_doc * input = yyjson_read(req.body.data(), req.body.size(), 0);
-    yyjson_val * root = input ? yyjson_doc_get_root(input) : nullptr;
-    yyjson_val * style_value = root ? yyjson_obj_get(root, "style") : nullptr;
+    yyjson_doc * input        = yyjson_read(req.body.data(), req.body.size(), 0);
+    yyjson_val * root         = input ? yyjson_doc_get_root(input) : nullptr;
+    yyjson_val * style_value  = root ? yyjson_obj_get(root, "style") : nullptr;
     yyjson_val * lyrics_value = root ? yyjson_obj_get(root, "lyrics") : nullptr;
     if (!yyjson_is_obj(root) || !yyjson_is_str(style_value) || !yyjson_is_str(lyrics_value)) {
-        if (input) yyjson_doc_free(input);
+        if (input) {
+            yyjson_doc_free(input);
+        }
         res.status = 400;
         res.set_content(json_string("error", "style and lyrics must be strings"), "application/json");
         return;
     }
-    std::string style(yyjson_get_str(style_value), yyjson_get_len(style_value));
-    std::string lyrics(yyjson_get_str(lyrics_value), yyjson_get_len(lyrics_value));
+    std::string  style(yyjson_get_str(style_value), yyjson_get_len(style_value));
+    std::string  lyrics(yyjson_get_str(lyrics_value), yyjson_get_len(lyrics_value));
     yyjson_val * cot_value = yyjson_obj_get(root, "cot");
-    std::string cot = yyjson_is_str(cot_value) ? yyjson_get_str(cot_value) : "full";
+    std::string  cot       = yyjson_is_str(cot_value) ? yyjson_get_str(cot_value) : "full";
     yyjson_doc_free(input);
     if (style.size() + lyrics.size() > 65536 || (cot != "full" && cot != "melody" && cot != "off")) {
         res.status = 400;
@@ -567,11 +569,11 @@ static void handle_tokenize(const httplib::Request & req, httplib::Response & re
         return;
     }
     const std::string normalized_lyrics = uni_nfc(lyrics);
-    Yue2Cot mode = cot == "off" ? YUE2_COT_OFF : cot == "melody" ? YUE2_COT_MELODY : YUE2_COT_FULL;
-    const std::string text = uni_nfc(yue2_request_text(mode, style, normalized_lyrics));
-    const auto ids = bpe_encode(g_tokenizer, text);
-    yyjson_mut_doc * doc = yyjson_mut_doc_new(nullptr);
-    yyjson_mut_val * answer = yyjson_mut_obj(doc);
+    Yue2Cot           mode   = cot == "off" ? YUE2_COT_OFF : cot == "melody" ? YUE2_COT_MELODY : YUE2_COT_FULL;
+    const std::string text   = uni_nfc(yue2_request_text(mode, style, normalized_lyrics));
+    const auto        ids    = bpe_encode(g_tokenizer, text);
+    yyjson_mut_doc *  doc    = yyjson_mut_doc_new(nullptr);
+    yyjson_mut_val *  answer = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, answer);
     yyjson_mut_obj_add_bool(doc, answer, "available", true);
     yyjson_mut_obj_add_strncpy(doc, answer, "text", text.data(), text.size());
@@ -579,16 +581,18 @@ static void handle_tokenize(const httplib::Request & req, httplib::Response & re
     yyjson_mut_obj_add_uint(doc, answer, "lyrics_start_bytes", text.size() - normalized_lyrics.size() - 1);
     yyjson_mut_obj_add_uint(doc, answer, "lyrics_end_bytes", text.size() - 1);
     yyjson_mut_val * pieces = yyjson_mut_arr(doc);
-    std::string restored;
+    std::string      restored;
     for (int id : ids) {
-        const std::string bytes = bpe_decode(g_tokenizer, std::vector<int>{id});
-        yyjson_mut_val * piece = yyjson_mut_arr_add_obj(doc, pieces);
+        const std::string bytes = bpe_decode(g_tokenizer, std::vector<int>{ id });
+        yyjson_mut_val *  piece = yyjson_mut_arr_add_obj(doc, pieces);
         yyjson_mut_obj_add_int(doc, piece, "id", id);
         yyjson_mut_obj_add_uint(doc, piece, "start", restored.size());
         restored += bytes;
         yyjson_mut_obj_add_uint(doc, piece, "end", restored.size());
         yyjson_mut_val * raw = yyjson_mut_arr(doc);
-        for (unsigned char byte : bytes) yyjson_mut_arr_add_uint(doc, raw, byte);
+        for (unsigned char byte : bytes) {
+            yyjson_mut_arr_add_uint(doc, raw, byte);
+        }
         yyjson_mut_obj_add_val(doc, piece, "bytes", raw);
     }
     yyjson_mut_obj_add_val(doc, answer, "pieces", pieces);
@@ -777,15 +781,15 @@ struct JobTracksSink {
 // carries its semantic stream, its score and the seeds it consumed, so a
 // resubmit reproduces it without the autoregression.
 static void job_track_ready(void * data, size_t t, Yue2Song & song) {
-    auto *            sink    = (JobTracksSink *) data;
+    auto *              sink    = (JobTracksSink *) data;
     const Yue2Request & request = *sink->request;
-    const int         M       = request.synth_batch_size;
-    JobTrack          track;
-    track.audio = encode_audio(request, song.audio, song.T_audio);
+    const int           M       = request.synth_batch_size;
+    JobTrack            track;
+    track.audio        = encode_audio(request, song.audio, song.T_audio);
     Yue2Request replay = request_replay(request, song.score.empty() ? request.abc : song.score,
                                         pipeline_format_tokens(song.tokens), (int) t / M, (int) t % M);
-    track.request = track_json(replay, song.truncated);
-    track.latents = std::move(song.latents);
+    track.request      = track_json(replay, song.truncated);
+    track.latents      = std::move(song.latents);
     std::lock_guard<std::mutex> lock(sink->job->mtx_tracks);
     if (track.audio.empty()) {
         sink->job->tracks_failed = true;
@@ -859,7 +863,8 @@ static void print_usage(const char * prog) {
             "  --host <addr>          Listen address (default: 0.0.0.0)\n"
             "  --port <N>             Listen port (default: 8087)\n"
             "  --max-batch <N>        Song batch limit, one KV set each (default: 1)\n"
-            "  --keep-loaded          Keep every model resident in VRAM (default: evict between stages; POST /evict unloads them)\n"
+            "  --keep-loaded          Keep every model resident in VRAM (default: evict between stages; POST /evict "
+            "unloads them)\n"
             "\n"
             "Debug:\n"
             "  --max-seq <N>          KV cache size (default: model context)\n"
@@ -942,8 +947,9 @@ int main(int argc, char ** argv) {
     if (!g_companion_path.empty()) {
         AdapterInfo info = adapter_inspect(g_companion_path);
         if (!info.ok || info.ar_keys > 0) {
-            fprintf(stderr, "[Server] FATAL: --companion %s: %s\n", g_companion_path.c_str(),
-                    info.ok ? "the companion adapts the decoder only, this file also adapts the LM" : info.error.c_str());
+            fprintf(
+                stderr, "[Server] FATAL: --companion %s: %s\n", g_companion_path.c_str(),
+                info.ok ? "the companion adapts the decoder only, this file also adapts the LM" : info.error.c_str());
             return 1;
         }
         fprintf(stderr, "[Server] Companion %s: %d decoder keys\n", g_companion_path.c_str(), info.nar_keys);
@@ -979,14 +985,15 @@ int main(int argc, char ** argv) {
     // a recording comes whole in one request body: an hour of 32-bit stereo at 48 kHz is 1.4 GB
     svr.set_payload_max_length((size_t) 2 * 1024 * 1024 * 1024);
 
-    // SO_REUSEADDR lets us rebind a port still in TIME_WAIT after a restart.
+    // Unix allows rebinding after TIME_WAIT. Windows needs exclusive addressing
+    // to stop a second live server from sharing the same listener.
     // SO_REUSEPORT is deliberately not set: a second instance on the same port
     // then fails with EADDRINUSE instead of silently sharing the socket and
     // splitting traffic between two daemons.
     svr.set_socket_options([](socket_t sock) {
         int one = 1;
 #ifdef _WIN32
-        setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (const char *) &one, sizeof(one));
+        setsockopt(sock, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, reinterpret_cast<const char *>(&one), sizeof(one));
 #else
         setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 #endif
@@ -1169,8 +1176,9 @@ int main(int argc, char ** argv) {
                 return;
             }
             const JobTrack & track = job->tracks[index];
-            res.set_content(multipart_build_tracks({ track.request }, { track.audio }, job->tracks_mime, { track.latents }),
-                            MULTIPART_MIME.c_str());
+            res.set_content(
+                multipart_build_tracks({ track.request }, { track.audio }, job->tracks_mime, { track.latents }),
+                MULTIPART_MIME.c_str());
             return;
         }
         if (status != JobStatus::DONE) {

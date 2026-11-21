@@ -73,24 +73,24 @@ struct Qw3lmMaskSpan {
 };
 
 struct Qw3lmKvCache {
-    Qwen3LMConfig         cfg;  // shape source: layers, heads, max_seq_len
-    ggml_backend_t        backend;
-    struct ggml_context * ctx;
-    ggml_backend_buffer_t buf;
+    Qwen3LMConfig                           cfg;  // shape source: layers, heads, max_seq_len
+    ggml_backend_t                          backend;
+    struct ggml_context *                   ctx;
+    ggml_backend_buffer_t                   buf;
     // F16, or Q8_0 where every reader is flash attention: its kernels read
     // quantized keys and values, the plain matmul path does not
-    enum ggml_type        type;
+    enum ggml_type                          type;
     // 4D batched: per-layer [D, max_seq, Nkv, n_sets] for batched flash_attn
-    struct ggml_tensor *  k4[QW3LM_MAX_LAYERS];
-    struct ggml_tensor *  v4[QW3LM_MAX_LAYERS];
+    struct ggml_tensor *                    k4[QW3LM_MAX_LAYERS];
+    struct ggml_tensor *                    v4[QW3LM_MAX_LAYERS];
     // 3D views: per-set, per-layer [D, max_seq, Nkv] for prefill, copy and the NAR read
-    struct ggml_tensor *  k[QW3LM_MAX_KV_SETS][QW3LM_MAX_LAYERS];
-    struct ggml_tensor *  v[QW3LM_MAX_KV_SETS][QW3LM_MAX_LAYERS];
-    int                   pos[QW3LM_MAX_KV_SETS];
-    int                   n_sets;
+    struct ggml_tensor *                    k[QW3LM_MAX_KV_SETS][QW3LM_MAX_LAYERS];
+    struct ggml_tensor *                    v[QW3LM_MAX_KV_SETS][QW3LM_MAX_LAYERS];
+    int                                     pos[QW3LM_MAX_KV_SETS];
+    int                                     n_sets;
     // Allocation number, unique across caches: a freed cache can come back
     // at the same addresses with another shape
-    uint64_t              epoch;
+    uint64_t                                epoch;
     // Per set, rewritten by the caller before each batched decode step;
     // empty leaves the plain causal mask
     std::vector<std::vector<Qw3lmMaskSpan>> prompt_bias;
@@ -876,7 +876,8 @@ static void qw3lm_forward_batch(Qwen3LM *      m,
                 const int64_t lo = span.a > 0 ? span.a : 0;
                 const int64_t hi = span.b < kvl ? span.b : kvl;
                 for (int64_t j = lo; j < hi; j++) {
-                    m->batch_graph.mask_data[(size_t) i * (size_t) n_kv_pad + (size_t) j] = ggml_fp32_to_fp16(span.bias);
+                    m->batch_graph.mask_data[(size_t) i * (size_t) n_kv_pad + (size_t) j] =
+                        ggml_fp32_to_fp16(span.bias);
                 }
             }
         }

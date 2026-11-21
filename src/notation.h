@@ -77,11 +77,11 @@ struct NotScore {
     std::vector<double>                      subbeat_times;
     std::vector<double>                      subbeat_quarters;
     std::vector<int>                         subbeat_den;
-    std::vector<std::string>                 key_arr;    // ABC key name per subbeat
-    std::vector<std::string>                 chord_arr;  // chord label per subbeat, "N" for none
-    std::map<std::string, std::string>       chord_text; // chord label -> ABC text, "" for no chord
+    std::vector<std::string>                 key_arr;     // ABC key name per subbeat
+    std::vector<std::string>                 chord_arr;   // chord label per subbeat, "N" for none
+    std::map<std::string, std::string>       chord_text;  // chord label -> ABC text, "" for no chord
     std::vector<std::pair<int, std::string>> structure_events;
-    std::vector<int>                         voice[2];   // 0 rest, pitch * 2 + 2 sustain, + 1 onset
+    std::vector<int>                         voice[2];    // 0 rest, pitch * 2 + 2 sustain, + 1 onset
     const NotTables *                        tables;
 };
 
@@ -227,7 +227,7 @@ static bool not_measures(const std::vector<NotBeat> & beats, std::vector<NotMeas
                 return not_fail(error, "Measure " + std::to_string(mi) + ": non-consecutive beat IDs");
             }
         }
-        bool pad_final    = sp.partial && same_num && !den_conflict && declared >= count;
+        bool pad_final = sp.partial && same_num && !den_conflict && declared >= count;
         measures->push_back({ sp.start, sp.end, count, den, pad_final ? declared : count, den, false });
     }
     if (repair_from >= 0) {
@@ -240,7 +240,7 @@ static bool not_measures(const std::vector<NotBeat> & beats, std::vector<NotMeas
             }
             int end     = std::min(last, start + num);
             int count   = end - start;
-            int notated = count < num ? num : count;   // a short tail pads with a rest
+            int notated = count < num ? num : count;  // a short tail pads with a rest
             measures->push_back({ start, end, count, den, notated, den, false });
             start = end;
         }
@@ -762,32 +762,46 @@ static bool not_score_to_abc(const NotScore & s, std::string * abc, std::string 
 // label -> ABC tables spelled a chord the same in every key, so a cover could
 // be scored with enharmonics that do not belong to its key.
 
-static const char * NOT_SHARP_NAMES[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
-static const char * NOT_FLAT_NAMES[12]  = { "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B" };
+static const char * NOT_SHARP_NAMES[12]  = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+static const char * NOT_FLAT_NAMES[12]   = { "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B" };
 static const char * NOT_MAJOR_TONICS[12] = { "C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B" };
 static const char * NOT_MINOR_TONICS[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "Bb", "B" };
 
 static int not_natural_pc(char letter) {
     switch (letter) {
-        case 'C': return 0;
-        case 'D': return 2;
-        case 'E': return 4;
-        case 'F': return 5;
-        case 'G': return 7;
-        case 'A': return 9;
-        default: return 11;
+        case 'C':
+            return 0;
+        case 'D':
+            return 2;
+        case 'E':
+            return 4;
+        case 'F':
+            return 5;
+        case 'G':
+            return 7;
+        case 'A':
+            return 9;
+        default:
+            return 11;
     }
 }
 
 static int not_natural_fifth(char letter) {
     switch (letter) {
-        case 'F': return 0;
-        case 'C': return 1;
-        case 'G': return 2;
-        case 'D': return 3;
-        case 'A': return 4;
-        case 'E': return 5;
-        default: return 6;
+        case 'F':
+            return 0;
+        case 'C':
+            return 1;
+        case 'G':
+            return 2;
+        case 'D':
+            return 3;
+        case 'A':
+            return 4;
+        case 'E':
+            return 5;
+        default:
+            return 6;
     }
 }
 
@@ -816,7 +830,8 @@ static bool not_root(const std::string & text, NotRoot * out) {
 }
 
 static std::string not_spell(char letter, int accidental) {
-    return std::string(1, letter) + (accidental >= 0 ? std::string((size_t) accidental, '#') : std::string((size_t) -accidental, 'b'));
+    return std::string(1, letter) +
+           (accidental >= 0 ? std::string((size_t) accidental, '#') : std::string((size_t) -accidental, 'b'));
 }
 
 static const struct NotQuality {
@@ -825,21 +840,21 @@ static const struct NotQuality {
     int          count;
     int          fifths[4];
 } NOT_QUALITIES[] = {
-    { "maj",      "",       3, { 0, 4, 1, 0 }    },
-    { "min",      "m",      3, { 0, -3, 1, 0 }   },
-    { "dim",      "dim",    3, { 0, -3, -6, 0 }  },
-    { "aug",      "aug",    3, { 0, 4, 8, 0 }    },
-    { "maj7",     "maj7",   4, { 0, 4, 1, 5 }    },
-    { "min7",     "m7",     4, { 0, -3, 1, -2 }  },
-    { "7",        "7",      4, { 0, 4, 1, -2 }   },
-    { "hdim7",    "m7b5",   4, { 0, -3, -6, -2 } },
-    { "dim7",     "dim7",   4, { 0, -3, -6, -9 } },
-    { "minmaj7",  "m(maj7)", 4, { 0, -3, 1, 5 }  },
-    { "sus2",     "sus2",   3, { 0, 2, 1, 0 }    },
-    { "sus4",     "sus4",   3, { 0, -1, 1, 0 }   },
-    { "sus4(b7)", "7sus4",  4, { 0, -1, 1, -2 }  },
-    { "maj6",     "6",      4, { 0, 4, 1, 3 }    },
-    { "min6",     "m6",     4, { 0, -3, 1, 3 }   },
+    { "maj",      "",        3, { 0, 4, 1, 0 }    },
+    { "min",      "m",       3, { 0, -3, 1, 0 }   },
+    { "dim",      "dim",     3, { 0, -3, -6, 0 }  },
+    { "aug",      "aug",     3, { 0, 4, 8, 0 }    },
+    { "maj7",     "maj7",    4, { 0, 4, 1, 5 }    },
+    { "min7",     "m7",      4, { 0, -3, 1, -2 }  },
+    { "7",        "7",       4, { 0, 4, 1, -2 }   },
+    { "hdim7",    "m7b5",    4, { 0, -3, -6, -2 } },
+    { "dim7",     "dim7",    4, { 0, -3, -6, -9 } },
+    { "minmaj7",  "m(maj7)", 4, { 0, -3, 1, 5 }   },
+    { "sus2",     "sus2",    3, { 0, 2, 1, 0 }    },
+    { "sus4",     "sus4",    3, { 0, -1, 1, 0 }   },
+    { "sus4(b7)", "7sus4",   4, { 0, -1, 1, -2 }  },
+    { "maj6",     "6",       4, { 0, 4, 1, 3 }    },
+    { "min6",     "m6",      4, { 0, -3, 1, 3 }   },
 };
 
 static const NotQuality * not_quality(const std::string & name) {
@@ -872,7 +887,10 @@ static bool not_normalize_key(const std::string & key, std::string * out, std::s
 
 // The root spelled nearest the key on the circle of fifths, over all of the
 // chord's tones, the root counted twice; ties go to the first letter of CDEFGAB
-static bool not_correct_chord(const std::string & chord, const std::string & key, std::string * out, std::string * error) {
+static bool not_correct_chord(const std::string & chord,
+                              const std::string & key,
+                              std::string *       out,
+                              std::string *       error) {
     if (not_no_chord(chord)) {
         *out = chord;
         return true;
@@ -922,13 +940,16 @@ static std::string not_portable_pitch(const std::string & text, const NotRoot & 
 }
 
 // "C:maj/3" -> the bass note E, by scale degree from the root
-static bool not_bass_pitch(const std::string & root_text, const std::string & degree_text, std::string * out, std::string * error) {
+static bool not_bass_pitch(const std::string & root_text,
+                           const std::string & degree_text,
+                           std::string *       out,
+                           std::string *       error) {
     NotRoot bass{};
     if (not_root(degree_text, &bass)) {
         *out = not_portable_pitch(degree_text, bass, true);
         return true;
     }
-    size_t digits = degree_text.find_first_of("0123456789");
+    size_t      digits      = degree_text.find_first_of("0123456789");
     std::string accidentals = digits == std::string::npos ? "" : degree_text.substr(0, digits);
     int         degree      = digits == std::string::npos ? 0 : atoi(degree_text.c_str() + digits);
     bool        sharp = accidentals == "#" || accidentals == "##", flat = accidentals == "b" || accidentals == "bb";
@@ -939,8 +960,9 @@ static bool not_bass_pitch(const std::string & root_text, const std::string & de
     NotRoot root{};
     not_root(root_text, &root);
     static const int scale[7] = { 0, 2, 4, 5, 7, 9, 11 };
-    int interval = scale[(degree - 1) % 7] + 12 * ((degree - 1) / 7) + (sharp ? (int) accidentals.size() : 0) - (flat ? (int) accidentals.size() : 0);
-    int target_pc = (root.pc + interval) % 12;
+    int interval = scale[(degree - 1) % 7] + 12 * ((degree - 1) / 7) + (sharp ? (int) accidentals.size() : 0) -
+                   (flat ? (int) accidentals.size() : 0);
+    int  target_pc     = (root.pc + interval) % 12;
     char target_letter = NOT_LETTERS[(strchr(NOT_LETTERS, root.letter) - NOT_LETTERS + degree - 1) % 7];
     int  difference    = ((target_pc - not_natural_pc(target_letter) + 6) % 12 + 12) % 12 - 6;
     if (difference >= -2 && difference <= 2) {
@@ -984,8 +1006,9 @@ static bool not_chord_abc(const std::string & chord, std::string * out, std::str
 }
 
 static bool not_key_signature(const std::string & name) {
-    static const char * names[] = { "C", "G", "D", "A", "E", "B", "F#", "C#", "F", "Bb", "Eb", "Ab", "Db", "Gb", "Cb",
-                                    "Am", "Em", "Bm", "F#m", "C#m", "G#m", "D#m", "A#m", "Dm", "Gm", "Cm", "Fm", "Bbm", "Ebm", "Abm" };
+    static const char * names[] = { "C",   "G",   "D",   "A",  "E",  "B",  "F#", "C#",  "F",   "Bb",
+                                    "Eb",  "Ab",  "Db",  "Gb", "Cb", "Am", "Em", "Bm",  "F#m", "C#m",
+                                    "G#m", "D#m", "A#m", "Dm", "Gm", "Cm", "Fm", "Bbm", "Ebm", "Abm" };
     for (const char * n : names) {
         if (name == n) {
             return true;
@@ -996,7 +1019,7 @@ static bool not_key_signature(const std::string & name) {
 
 // "Db:major" -> "Db", "C#:minor" -> "C#m": a key signature ABC has
 static bool not_key_abc(const std::string & key, std::string * out, std::string * error) {
-    size_t      colon = key.find(':');
+    size_t      colon     = key.find(':');
     std::string root_text = key.substr(0, colon), suffix;
     if (colon != std::string::npos) {
         std::string mode = key.substr(colon + 1);
@@ -1185,7 +1208,7 @@ static bool notation_abc(const std::vector<NotEvent> & events,
     NotScore s;
     s.tables     = &tables;
     s.chord_text = chord_text;
-    s.beats  = beats;
+    s.beats      = beats;
     if (!not_measures(s.beats, &s.measures, error) || !not_grid(&s, error)) {
         return false;
     }

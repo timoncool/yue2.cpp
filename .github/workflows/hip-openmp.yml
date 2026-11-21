@@ -1,0 +1,41 @@
+name: Windows OpenMP runtime for the HIP engine
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [music-round/native-hip-current]
+    paths: [.github/workflows/hip-openmp.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  openmp:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: llvm/llvm-project
+          ref: 87f0227cb60147a26a1eeb4fb06e3b505e9c7261
+          sparse-checkout: |
+            openmp
+            cmake
+            llvm/cmake
+            llvm/include
+      - name: Build LLVM's shared host runtime with the ABI name imported by ggml
+        shell: pwsh
+        run: |
+          cmake -S openmp -B build -A x64 -DOPENMP_MSVC_NAME_SCHEME=ON -DOPENMP_ENABLE_LIBOMPTARGET=OFF -DLIBOMP_OMPT_SUPPORT=OFF
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          cmake --build build --config Release --target omp --parallel
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $dll = @(Get-ChildItem build -Recurse -File -Filter libomp140.x86_64.dll)
+          if ($dll.Count -ne 1) { throw "Expected one built OpenMP runtime, found $($dll.Count)" }
+          New-Item package -ItemType Directory | Out-Null
+          Copy-Item -LiteralPath $dll[0].FullName -Destination package
+          Copy-Item -LiteralPath openmp/LICENSE.TXT -Destination package/LICENSE-LLVM-OpenMP.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-llvm-openmp
+          path: package/
+          if-no-files-found: error

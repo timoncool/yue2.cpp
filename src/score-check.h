@@ -95,7 +95,7 @@ static std::string yue2_score_problem(const std::string & abc) {
             }
             continue;
         }
-        bars = bars || line.find('|') != std::string::npos;
+        bars     = bars || line.find('|') != std::string::npos;
         int here = yue2_score_stray_colons(line);
         if (here > 0 && first_stray.empty()) {
             first_stray = line.size() > 40 ? line.substr(0, 40) + "..." : line;
@@ -103,7 +103,11 @@ static std::string yue2_score_problem(const std::string & abc) {
         stray += here;
     }
     std::string missing;
-    for (auto [have, name] : { std::pair<bool, const char *>{ meter, "M:" }, { length, "L:" }, { key, "K:" } }) {
+    for (auto [have, name] : {
+             std::pair<bool, const char *>{ meter,  "M:" },
+                { length, "L:" },
+                { key,    "K:" }
+    }) {
         if (!have) {
             missing += (missing.empty() ? "" : ", ") + std::string(name);
         }
@@ -194,7 +198,7 @@ static std::string yue2_score_fill_header(const std::string & abc) {
     }
     std::string key_line = key ? std::string() : "K:C\n";
     // M:/L: after an opening X: line, or at the very top when there is none.
-    size_t at = 0;
+    size_t      at       = 0;
     if (kept.compare(0, 2, "X:") == 0) {
         size_t nl = kept.find('\n');
         at        = nl == std::string::npos ? kept.size() : nl + 1;

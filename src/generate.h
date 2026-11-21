@@ -98,14 +98,14 @@ static bool yue2_generate(Qwen3LM *                             lm,
                           int64_t                               seed,
                           Yue2Phase                             phase,
                           std::vector<Yue2Generation> *         out,
-                          bool (*cancelled)(void *) = nullptr,
-                          void *                 cancel_data = nullptr,
-                          const Yue2PromptMask * mask        = nullptr,
-                          const std::vector<int> * carried   = nullptr,
-                          const Yue2HarmonyPlan * harmony    = nullptr) {
-    const int B       = (int) prefixes.size();
-    const int context = kv->cfg.max_seq_len;
-    bool      guided  = cfg_scale != 1.0f;
+                          bool (*cancelled)(void *)            = nullptr,
+                          void *                   cancel_data = nullptr,
+                          const Yue2PromptMask *   mask        = nullptr,
+                          const std::vector<int> * carried     = nullptr,
+                          const Yue2HarmonyPlan *  harmony     = nullptr) {
+    const int B         = (int) prefixes.size();
+    const int context   = kv->cfg.max_seq_len;
+    bool      guided    = cfg_scale != 1.0f;
     // a stream carried in at the end of every prefix: the draw goes on from it
     const int carried_n = carried ? (int) carried->size() : 0;
     if (guided && (int) negatives.size() != B) {
@@ -169,15 +169,15 @@ static bool yue2_generate(Qwen3LM *                             lm,
     // Forwards a sequence still owes once it stops drawing: one for its end
     // token, two when the budget cut it on a content token. Negative while
     // it draws, zero once sealed.
-    std::vector<int>           owed(B, -1);
-    std::vector<int>           tokens(N);
-    std::vector<float>         mixed(guided ? (size_t) rows : 0);
-    std::vector<Yue2Candidate> candidates;
+    std::vector<int>              owed(B, -1);
+    std::vector<int>              tokens(N);
+    std::vector<float>            mixed(guided ? (size_t) rows : 0);
+    std::vector<Yue2Candidate>    candidates;
     // chord variety and section order of the plan, off unless asked for
     const bool                    steered = harmony && phase == YUE2_PHASE_ABC && harmony->cfg.active();
     std::vector<Yue2HarmonyState> chords(steered ? (size_t) B : 0);
     std::vector<float>            steered_logits;
-    int                        step = carried_n;
+    int                           step = carried_n;
     for (;; step++) {
         if (cancelled && cancelled(cancel_data)) {
             fprintf(stderr, "[AR] Cancelled at step %d\n", step);
@@ -235,7 +235,8 @@ static bool yue2_generate(Qwen3LM *                             lm,
         if (mask) {
             kv->prompt_bias.assign((size_t) N, {});
             for (int i = 0; i < B; i++) {
-                yue2_mask_spans(*mask, (double) (*out)[i].tokens.size() * mask->frame_sec, &kv->prompt_bias[(size_t) i]);
+                yue2_mask_spans(*mask, (double) (*out)[i].tokens.size() * mask->frame_sec,
+                                &kv->prompt_bias[(size_t) i]);
             }
         }
         qw3lm_forward_batch(lm, kv, tokens.data(), kv_sets.data(), N, batched.data(), row0, rows);

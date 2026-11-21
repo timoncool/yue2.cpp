@@ -65,7 +65,8 @@ int main(int argc, char ** argv) {
         return !yue2_score_problem(abc).empty() && yue2_score_problem(yue2_score_fill_header(abc)).empty();
     };
     check(rescued("X:1\nV: Vocal\nc4d4e4f4|g4a4b4c'4|\nV: Ins\nZ4|\n"), "a headerless plan is filled and sings");
-    check(rescued("X:1\nM:4/4\nL:1/16\nV: Vocal\nc4d4e4f4|\nV: Ins\nZ4|\n"), "a dropped key is filled in after meter and length");
+    check(rescued("X:1\nM:4/4\nL:1/16\nV: Vocal\nc4d4e4f4|\nV: Ins\nZ4|\n"),
+          "a dropped key is filled in after meter and length");
     check(rescued("X:1\nK:C\nV: Vocal\nc4d4e4f4|\nV: Ins\nZ4|\n"), "a dropped meter and length are filled in");
     check(rescued("V: Vocal\nc4d4e4f4|\nV: Ins\nZ4|\n"), "a plan with no X: line is filled at its top");
     check(yue2_score_fill_header(GOOD) == GOOD, "a well-formed header is left untouched");
@@ -81,13 +82,15 @@ int main(int argc, char ** argv) {
         check(filled.find("K:C\nV: Vocal") != std::string::npos, "the key goes in before the first voice");
         check(filled.find("% verse") != std::string::npos, "comments before the first voice stay");
     }
-    check(!yue2_score_problem(yue2_score_fill_header("V: Vocal\nc4 d4\nV: Ins\nZ\n")).empty(), "a body without bars is not rescued");
-    check(!yue2_score_problem(yue2_score_fill_header("X:1\nV: Vocal\nc4:d4|\nV: Ins\nZ4|\n")).empty(), "stray colons are not rescued");
+    check(!yue2_score_problem(yue2_score_fill_header("V: Vocal\nc4 d4\nV: Ins\nZ\n")).empty(),
+          "a body without bars is not rescued");
+    check(!yue2_score_problem(yue2_score_fill_header("X:1\nV: Vocal\nc4:d4|\nV: Ins\nZ4|\n")).empty(),
+          "stray colons are not rescued");
     {
         // a plan with no header and no bars is reported for what is left once the header is filled in
-        const char * barless = "V: Vocal\nc4 d4\nV: Ins\nZ\n";
-        const std::string before = yue2_score_problem(barless);
-        const std::string after  = yue2_score_problem(yue2_score_fill_header(barless));
+        const char *      barless = "V: Vocal\nc4 d4\nV: Ins\nZ\n";
+        const std::string before  = yue2_score_problem(barless);
+        const std::string after   = yue2_score_problem(yue2_score_fill_header(barless));
         check(!after.empty() && after != before && after.find("M:") == std::string::npos,
               "the reason left after the header is filled in names no header");
     }

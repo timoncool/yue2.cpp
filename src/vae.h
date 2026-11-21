@@ -214,8 +214,8 @@ static void vae_ggml_load(VAEGGML * m, const char * path) {
     m->weight_ctx                    = ggml_init(p);
     struct ggml_context * ctx        = m->weight_ctx;
 
-    m->c1w = ggml_new_tensor_3d(ctx, wt, 7, 64, 2048);
-    m->c1b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2048);
+    m->c1w        = ggml_new_tensor_3d(ctx, wt, 7, 64, 2048);
+    m->c1b        = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 2048);
     auto new_unit = [&](VAEResUnit & ru, int C, int dil) {
         ru.dilation = dil;
         ru.s1a      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 1, C);
@@ -335,8 +335,8 @@ static struct ggml_tensor * vae_conv1d(struct ggml_context * ctx,
         // ggml_conv_1d unfolds the input into F16 whatever the kernel, and the GEMM then runs in F16 (tiled and whole
         // decodes of VAE-RS differed by -55 dB, the fp16 error its release rules out). The same steps with an F32 unfold.
         struct ggml_tensor * col = ggml_im2col(ctx, w, x, stride, 0, padding, 0, dilation, 0, false, GGML_TYPE_F32);
-        y = ggml_mul_mat(ctx, ggml_reshape_2d(ctx, col, col->ne[0], col->ne[2] * col->ne[1]),
-                         ggml_reshape_2d(ctx, w, w->ne[0] * w->ne[1], w->ne[2]));
+        y                        = ggml_mul_mat(ctx, ggml_reshape_2d(ctx, col, col->ne[0], col->ne[2] * col->ne[1]),
+                                                ggml_reshape_2d(ctx, w, w->ne[0] * w->ne[1], w->ne[2]));
         // true float32 on CUDA too, where cuBLAS runs F32 in TF32 by default (honoured by a ggml with the strict-F32
         // request on src1; see ggml PR "CUDA: an F32 request on src1 is met without TF32")
         ggml_prec_set_src(y, GGML_PREC_F32, 1);
@@ -345,8 +345,7 @@ static struct ggml_tensor * vae_conv1d(struct ggml_context * ctx,
         y = ggml_reshape_2d(ctx, y, y->ne[0], y->ne[1]);
     } else {
         // implicit GEMM conv of a one row image, the patches only expand in shared memory: [T, IC] -> [T_out, OC]
-        y =
-            ggml_conv_2d_direct(ctx, ggml_reshape_4d(ctx, w, w->ne[0], 1, w->ne[1], w->ne[2]),
+        y = ggml_conv_2d_direct(ctx, ggml_reshape_4d(ctx, w, w->ne[0], 1, w->ne[1], w->ne[2]),
                                 ggml_reshape_4d(ctx, x, x->ne[0], 1, x->ne[1], 1), stride, 1, padding, 0, dilation, 1);
         y = ggml_reshape_2d(ctx, y, y->ne[0], y->ne[2]);
     }
@@ -441,8 +440,8 @@ static struct ggml_tensor * vae_ggml_build_graph(struct ggml_context * ctx,
 // Core compute: ensure graph cached, set input, run. Returns T_audio or -1.
 // Output remains in m->graph_output for caller to read as needed.
 // A graph that does not fit the device is not an error of the decode: the caller decodes again in smaller tiles.
-static constexpr int VAE_GRAPH_NO_FIT = -2;
-static constexpr int VAE_MIN_CORE     = 64;
+static constexpr int    VAE_GRAPH_NO_FIT  = -2;
+static constexpr int    VAE_MIN_CORE      = 64;
 // What the desktop, a browser and the CUDA context usually hold of a card's memory.
 static constexpr size_t VAE_CARD_HEADROOM = (size_t) 768 * 1024 * 1024;
 
@@ -468,15 +467,15 @@ static bool vae_graph_fits(ggml_backend_sched_t sched, struct ggml_cgraph * grap
     bool fits = true;
     for (int i = 0; i < count; ++i) {
         size_t             free_b = 0, total_b = 0;
-        ggml_backend_dev_t dev    = ggml_backend_get_device(backends[i]);
+        ggml_backend_dev_t dev = ggml_backend_get_device(backends[i]);
         if (dev) {
             ggml_backend_dev_memory(dev, &free_b, &total_b);
         }
         const size_t retained = ggml_backend_sched_get_buffer_size(sched, backends[i]);
         // the driver tells a process the room it has itself, not what the desktop and other programs hold on the
         // card: a card's graph leaves them VAE_CARD_HEADROOM, or it would be taken as fitting and spill
-        const bool   card = dev && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU;
-        const size_t room = card && free_b > VAE_CARD_HEADROOM ? free_b - VAE_CARD_HEADROOM : (card ? 0 : free_b);
+        const bool   card     = dev && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU;
+        const size_t room     = card && free_b > VAE_CARD_HEADROOM ? free_b - VAE_CARD_HEADROOM : (card ? 0 : free_b);
         if (total_b && sizes[i] > retained && sizes[i] - retained > room) {
             fprintf(stderr, "[VAE] Graph needs %.2f GB on %s, %.2f GB free: smaller tiles\n", sizes[i] / 1073741824.0,
                     ggml_backend_name(backends[i]), free_b / 1073741824.0);
@@ -504,18 +503,18 @@ static void vae_graph_clear(VAEGGML * m) {
 
 // Returns T_audio, -1 on an error, or VAE_GRAPH_NO_FIT when the graph of this window has no room on the device.
 static int vae_ggml_compute(VAEGGML *     m,
-                            const float * latent,    // [T_full, 64] time-major
-                            int           T_latent,  // window length to decode
-                            int           win_start = 0,       // offset into latent
+                            const float * latent,         // [T_full, 64] time-major
+                            int           T_latent,       // window length to decode
+                            int           win_start = 0,  // offset into latent
                             bool          measure   = true) {
-
     // Build graph only when T_latent changes (cached for tiled decode reuse)
     if (m->graph_T != T_latent) {
         vae_graph_clear(m);
 
         // Graph context (generous fixed allocation)
-        size_t ctx_size = ggml_tensor_overhead() * 4096 + ggml_graph_overhead_custom(8192, false);  // VAE-RS ~2.3x the nodes
-        m->graph_buf    = (uint8_t *) malloc(ctx_size);
+        size_t ctx_size =
+            ggml_tensor_overhead() * 4096 + ggml_graph_overhead_custom(8192, false);  // VAE-RS ~2.3x the nodes
+        m->graph_buf = (uint8_t *) malloc(ctx_size);
         if (!m->graph_buf) {
             fprintf(stderr, "[VAE] FATAL: OOM allocating graph context (%zu bytes) for T=%d\n", ctx_size, T_latent);
             m->graph_T = 0;
@@ -565,7 +564,8 @@ static int vae_ggml_compute(VAEGGML *     m,
 
     const enum ggml_status status = ggml_backend_sched_graph_compute(m->sched, m->graph);
     if (status != GGML_STATUS_SUCCESS) {
-        fprintf(stderr, "[VAE] FATAL: graph compute failed (status %d) for T=%d at %d\n", (int) status, T_latent, win_start);
+        fprintf(stderr, "[VAE] FATAL: graph compute failed (status %d) for T=%d at %d\n", (int) status, T_latent,
+                win_start);
         return -1;
     }
 
@@ -675,8 +675,8 @@ static int vae_ggml_decode_tiles(VAEGGML *     m,
         ggml_backend_tensor_get(m->graph_output, audio_out + max_T_audio + out_start, (tile_T + crop) * sizeof(float),
                                 core_len * sizeof(float));
         {
-            const FloatStats in = float_stats(latent + (size_t) left * 64, (size_t) (right - left) * 64);
-            FloatStats       out = float_stats(audio_out + out_start, (size_t) core_len);
+            const FloatStats in       = float_stats(latent + (size_t) left * 64, (size_t) (right - left) * 64);
+            FloatStats       out      = float_stats(audio_out + out_start, (size_t) core_len);
             const FloatStats right_ch = float_stats(audio_out + max_T_audio + out_start, (size_t) core_len);
             out.count += right_ch.count;
             out.nans += right_ch.nans;
@@ -723,13 +723,16 @@ static int vae_ggml_decode_tiled(VAEGGML *     m,
         if (cancel && cancel(cancel_data)) {
             return -1;
         }
-        const int result = vae_ggml_decode_tiles(m, latent, T_latent, audio_out, max_T_audio, core_frames, halo_frames, cancel, cancel_data);
+        const int result = vae_ggml_decode_tiles(m, latent, T_latent, audio_out, max_T_audio, core_frames, halo_frames,
+                                                 cancel, cancel_data);
         if (result != VAE_GRAPH_NO_FIT) {
             return result;
         }
         const int frames = T_latent < core_frames ? T_latent : core_frames;
         if (frames <= VAE_MIN_CORE) {
-            fprintf(stderr, "[VAE] FATAL: the decoder does not fit the device even in tiles of %d frames: out of memory\n", frames);
+            fprintf(stderr,
+                    "[VAE] FATAL: the decoder does not fit the device even in tiles of %d frames: out of memory\n",
+                    frames);
             return -1;
         }
         core_frames = frames / 2 < VAE_MIN_CORE ? VAE_MIN_CORE : frames / 2;

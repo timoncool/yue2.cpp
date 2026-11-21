@@ -155,7 +155,7 @@ static uint32_t uni_compose_pair(uint32_t a, uint32_t b) {
         size_t mid = (lo + hi) / 2;
         if (a < UNI_COMP[mid][0] || (a == UNI_COMP[mid][0] && b < UNI_COMP[mid][1])) {
             hi = mid;
-        } else if (a > UNI_COMP[mid][0] || (a == UNI_COMP[mid][0] && b > UNI_COMP[mid][1])) {
+        } else if (a > UNI_COMP[mid][0] || b > UNI_COMP[mid][1]) {
             lo = mid + 1;
         } else {
             return UNI_COMP[mid][2];

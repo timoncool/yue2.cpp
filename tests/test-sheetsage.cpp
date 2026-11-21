@@ -90,10 +90,19 @@ int main(int argc, char ** argv) {
     }
     std::string path = std::string(argv[3]) + "/tokens.txt";
     f                = fopen(path.c_str(), "w");
-    for (int id : tokens) {
-        fprintf(f, "%d\n", id);
+    if (!f) {
+        fprintf(stderr, "[Test-SheetSage] cannot write %s\n", path.c_str());
+        return 1;
     }
-    fclose(f);
+    for (int id : tokens) {
+        if (fprintf(f, "%d\n", id) < 0) {
+            fclose(f);
+            return 1;
+        }
+    }
+    if (fclose(f) != 0) {
+        return 1;
+    }
 
     // The score, full and melody only, the way the reference writes them
     double                duration = (double) got / MERT_SAMPLE_RATE;
@@ -109,8 +118,14 @@ int main(int argc, char ** argv) {
         }
         path = std::string(argv[3]) + (melody_only ? "/score-melody.abc" : "/score.abc");
         f    = fopen(path.c_str(), "w");
-        fwrite(abc.data(), 1, abc.size(), f);
-        fclose(f);
+        if (!f) {
+            fprintf(stderr, "[Test-SheetSage] cannot write %s\n", path.c_str());
+            return 1;
+        }
+        size_t written = fwrite(abc.data(), 1, abc.size(), f);
+        if (fclose(f) != 0 || written != abc.size()) {
+            return 1;
+        }
     }
     fprintf(stderr, "[Test-SheetSage] %zu events, scores written\n", events.size());
     ss2_decoder_free(&dec);

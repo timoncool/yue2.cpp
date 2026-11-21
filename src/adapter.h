@@ -392,7 +392,6 @@ static std::map<std::string, std::string> adapter_read_metadata(const STFile & s
     return out;
 }
 
-
 // alpha of the whole file from its __metadata__: the plain "alpha" entry, or the
 // "alpha" of the JSON document a trainer stored under "yue2_lora_meta"; 0 when
 // neither names one
@@ -718,7 +717,7 @@ static bool adapter_collect(const std::string &                               fi
     if (meta_alpha > 0.0f) {
         fprintf(stderr, "[Adapter] %s: alpha %g from its metadata\n", file.c_str(), (double) meta_alpha);
     }
-    float lokr_dim   = meta.count("lokr_dim") ? (float) atof(meta["lokr_dim"].c_str()) : 0.0f;
+    float lokr_dim = meta.count("lokr_dim") ? (float) atof(meta["lokr_dim"].c_str()) : 0.0f;
 
     // group the keys of this half by module and target
     std::map<std::string, AdapterModule> modules;

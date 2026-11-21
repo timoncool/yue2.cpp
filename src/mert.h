@@ -8,9 +8,9 @@
 // the projections at load, and builds the encoder into its own graph: the
 // subsampled frames and the state after every layer are there to read.
 
-#include "lora-terms.h"
 #include "audio-resample.h"
 #include "gguf-weights.h"
+#include "lora-terms.h"
 #include "weight-ctx.h"
 #include "yyjson.h"
 

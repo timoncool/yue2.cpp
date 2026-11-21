@@ -44,8 +44,7 @@
 
 // Named probes of the velocity graph, read by the cossim harness: the key
 // depths of the latent block and the layer 0 attention output
-#define YUE2_NAR_PROBE_LAYERS \
-    { 0, 7, 14, 21, 27 }
+#define YUE2_NAR_PROBE_LAYERS { 0, 7, 14, 21, 27 }
 
 struct Yue2NAR {
     Qwen3LMConfig cfg;  // the backbone config, shared with the AR half
@@ -246,8 +245,8 @@ static struct ggml_tensor * nar_build_attn(struct ggml_context * ctx,
                                            struct ggml_tensor *  x,          // [H, N, M]
                                            struct ggml_tensor *  positions,  // [N]
                                            struct ggml_tensor *  mask,       // [pad(ar_len + N), pad(N)] f16
-                                           struct ggml_tensor *  kv_zero,    // zero keys up to the padded count, or null
-                                           struct ggml_tensor *  cache_k,    // [D, max_seq, Nkv] f16
+                                           struct ggml_tensor *  kv_zero,  // zero keys up to the padded count, or null
+                                           struct ggml_tensor *  cache_k,  // [D, max_seq, Nkv] f16
                                            struct ggml_tensor *  cache_v,
                                            int                   ar_len,
                                            int                   N,
@@ -376,7 +375,8 @@ static bool nar_build_graph(Yue2NAR * n, const Qw3lmKvCache * kv, int T_lat, int
         n->in_mask                 = ggml_new_tensor_2d(n->input_ctx, GGML_TYPE_F16, keys, mask_rows);
         n->in_kv_zero              = nullptr;
         if (keys > ar_len + N) {
-            n->in_kv_zero = ggml_new_tensor_4d(n->input_ctx, GGML_TYPE_F16, c.head_dim, keys - ar_len - N, c.n_kv_heads, 1);
+            n->in_kv_zero =
+                ggml_new_tensor_4d(n->input_ctx, GGML_TYPE_F16, c.head_dim, keys - ar_len - N, c.n_kv_heads, 1);
             ggml_set_name(n->in_kv_zero, "nar_kv_zero");
             ggml_set_input(n->in_kv_zero);
         }
@@ -410,8 +410,9 @@ static bool nar_build_graph(Yue2NAR * n, const Qw3lmKvCache * kv, int T_lat, int
     for (int l = 0; l < c.n_layers; l++) {
         Qwen3Layer *         ly   = &n->layers[l];
         struct ggml_tensor * norm = qwen3_rms_norm(ctx, hidden, ly->input_layernorm, c.rms_norm_eps);
-        struct ggml_tensor * attn = nar_build_attn(ctx, c, ly, norm, n->in_pos, n->in_mask, n->in_kv_zero, kv->k[kv_set][l],
-                                                   kv->v[kv_set][l], ar_len, N, M, n->use_flash_attn, n->clamp_fp16);
+        struct ggml_tensor * attn =
+            nar_build_attn(ctx, c, ly, norm, n->in_pos, n->in_mask, n->in_kv_zero, kv->k[kv_set][l], kv->v[kv_set][l],
+                           ar_len, N, M, n->use_flash_attn, n->clamp_fp16);
         if (l == 0) {
             ggml_set_name(attn, "layer0_sa_output");
             ggml_set_output(attn);
@@ -595,10 +596,12 @@ static bool nar_solve(Yue2NAR *            n,
             if (!float_stats_bad(s)) {
                 break;
             }
-            snprintf(name, sizeof(name), "velocity at step %d, evaluation %d, attempt %d", current, evaluations, attempt);
+            snprintf(name, sizeof(name), "velocity at step %d, evaluation %d, attempt %d", current, evaluations,
+                      attempt);
             float_stats_print("[NAR] Check FAILED", name, s);
             if (attempt == 3) {
-                fprintf(stderr, "[NAR] FATAL: the velocity is not finite at step %d after %d evaluations\n", current, attempt);
+                fprintf(stderr, "[NAR] FATAL: the velocity is not finite at step %d after %d evaluations\n", current,
+                         attempt);
                 return false;
             }
             if (!nar_velocity(n, kv, x, T_lat, M, ar_len, kv_set, nar_logit_clamped(t), out)) {
@@ -634,7 +637,8 @@ static bool nar_solve(Yue2NAR *            n,
     const FloatStats solved = float_stats(state, count);
     float_stats_print("[NAR] Check", "solved latents", solved);
     if (float_stats_bad(solved)) {
-        fprintf(stderr, "[NAR] FATAL: the solved latents are not audio (%zu NaN, %zu Inf, %zu zeros of %zu) for T_lat=%d\n",
+        fprintf(stderr,
+                "[NAR] FATAL: the solved latents are not audio (%zu NaN, %zu Inf, %zu zeros of %zu) for T_lat=%d\n",
                 solved.nans, solved.infs, solved.zeros, solved.count, T_lat);
         return false;
     }

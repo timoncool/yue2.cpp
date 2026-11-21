@@ -33,6 +33,7 @@ int main(int argc, char ** argv) {
     std::vector<float> probs((size_t) count);
     if (fread(probs.data(), sizeof(float), probs.size(), f) != probs.size()) {
         fprintf(stderr, "[Test-Draw] cannot read %s\n", probs_path);
+        fclose(f);
         return 1;
     }
     fclose(f);

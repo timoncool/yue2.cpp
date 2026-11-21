@@ -44,19 +44,19 @@
 // resident; max_seq and max_batch size the cache, which the pipeline owns
 // and never evicts.
 struct Yue2PipelineParams {
-    int  max_seq    = 0;                  // 0 = model context, the whole 24576
-    int  max_batch  = 1;                  // song batch limit, one KV set per song, two under guidance
-    bool no_fa      = false;              // disable flash attention
-    bool kv_q8      = false;              // Q8_0 KV cache, about half the F16 one; needs flash attention on a GPU
-    bool clamp_fp16 = false;              // clamp hidden states on sub-Ampere CUDA
-    int  vae_core   = 512;                // VAE tile core frames
-    int  vae_halo   = 16;                 // VAE tile halo frames
-    int  nar_chunk  = 0;                  // acoustic chunk frame cap, 0 = what the context holds
-    int  nar_halo   = 0;                  // frames a later chunk solves before its fade and drops, 0 = the fade alone
+    int  max_seq    = 0;                 // 0 = model context, the whole 24576
+    int  max_batch  = 1;                 // song batch limit, one KV set per song, two under guidance
+    bool no_fa      = false;             // disable flash attention
+    bool kv_q8      = false;             // Q8_0 KV cache, about half the F16 one; needs flash attention on a GPU
+    bool clamp_fp16 = false;             // clamp hidden states on sub-Ampere CUDA
+    int  vae_core   = 512;               // VAE tile core frames
+    int  vae_halo   = 16;                // VAE tile halo frames
+    int  nar_chunk  = 0;                 // acoustic chunk frame cap, 0 = what the context holds
+    int  nar_halo   = 0;                 // frames a later chunk solves before its fade and drops, 0 = the fade alone
 
-    const char * vae_decoder  = nullptr;  // a GGUF holding a decoder alone, used to decode; the VAE GGUF keeps encoding
+    const char * vae_decoder = nullptr;  // a GGUF holding a decoder alone, used to decode; the VAE GGUF keeps encoding
 
-    const char * dump_dir     = nullptr;  // probe dumps of the first track for the cossim harness
+    const char * dump_dir = nullptr;     // probe dumps of the first track for the cossim harness
 };
 
 struct Yue2Pipeline {
@@ -536,8 +536,8 @@ static bool pipeline_lyric_mask(const BPETokenizer * tok, const Yue2Request & r,
 static bool pipeline_generate(Yue2Pipeline *          p,
                               const Yue2Request &     r,
                               std::vector<Yue2Song> * songs,
-                              bool (*cancelled)(void *) = nullptr,
-                              void * cancel_data        = nullptr,
+                              bool (*cancelled)(void *)                       = nullptr,
+                              void * cancel_data                              = nullptr,
                               void (*track_ready)(void *, size_t, Yue2Song &) = nullptr,
                               void * track_data                               = nullptr) {
     Timer   total_timer;
@@ -669,14 +669,14 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                     r.harmony.progressions.size());
         }
         if (!yue2_generate(lm, &p->kv, std::vector<std::vector<int>>(B, open), {}, 1.0f, abc_sampling, r.lm_seed,
-                           YUE2_PHASE_ABC, &plans, cancelled, cancel_data, nullptr,
-                           r.abc_continue ? &opening : nullptr, r.harmony.active() ? &harmony : nullptr)) {
+                           YUE2_PHASE_ABC, &plans, cancelled, cancel_data, nullptr, r.abc_continue ? &opening : nullptr,
+                           r.harmony.active() ? &harmony : nullptr)) {
             return false;
         }
         for (int i = 0; i < B; i++) {
-            abc_ids[i]   = plans[i].tokens;
-            scores[i]    = bpe_decode(tok, abc_ids[i]);
-            truncated[i] = plans[i].truncated;
+            abc_ids[i]          = plans[i].tokens;
+            scores[i]           = bpe_decode(tok, abc_ids[i]);
+            truncated[i]        = plans[i].truncated;
             // a plan nothing can be sung from is planned again on seeds no
             // other song of the batch draws, and stops the song before the
             // long stage once the retries are spent
@@ -708,7 +708,8 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                     std::string left = yue2_score_problem(repaired);
                     if (left.empty()) {
                         fprintf(stderr,
-                                "[Pipeline] score of song %d had no usable header; filled in M:/L:/K: defaults and keeping it\n",
+                                "[Pipeline] score of song %d had no usable header; filled in M:/L:/K: defaults and "
+                                "keeping it\n",
                                 i + 1);
                         scores[i]  = repaired;
                         abc_ids[i] = bpe_encode(tok, repaired);
@@ -721,8 +722,8 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                         yue2_score_excerpt(scores[i], 800).c_str());
                 fprintf(stderr, "[Pipeline] FATAL: the score the model wrote for song %d cannot be sung: %s. %s\n",
                         i + 1, problem.c_str(),
-                        r.adapters.empty() ? "Draw another seed."
-                                           : "Adapters past their limits on the score half do this: lower their "
+                        r.adapters.empty() ? "Draw another seed." :
+                                             "Adapters past their limits on the score half do this: lower their "
                                              "strengths or draw another seed.");
                 return false;
             }
@@ -834,9 +835,9 @@ static bool pipeline_generate(Yue2Pipeline *          p,
         pipeline_kv_capacity(p, need);
         Yue2PromptMask lyric_mask;
         if (r.lyric_schedule.on) {
-            const char * why = guidance != 1.0f                    ? "needs cfg_scale 1"
-                               : !has_score || r.abc.empty() ? "needs a supplied score"
-                                                                   : nullptr;
+            const char * why = guidance != 1.0f            ? "needs cfg_scale 1" :
+                               !has_score || r.abc.empty() ? "needs a supplied score" :
+                                                             nullptr;
             if (why) {
                 fprintf(stderr, "[Pipeline] FATAL: lyric_schedule %s\n", why);
                 return false;
@@ -846,7 +847,7 @@ static bool pipeline_generate(Yue2Pipeline *          p,
             }
         }
         // a carried stream is prefilled behind the prompt on every set
-        std::vector<std::vector<int>> ar_prefixes = prefixes;
+        std::vector<std::vector<int>> ar_prefixes  = prefixes;
         std::vector<std::vector<int>> ar_negatives = negatives;
         for (auto & prefix : ar_prefixes) {
             prefix.insert(prefix.end(), carried.begin(), carried.end());
@@ -993,7 +994,8 @@ static bool pipeline_generate(Yue2Pipeline *          p,
             size_t span = (size_t) frames * YUE2_LATENT_DIM;
             block.resize(span * M);
             for (int j = 0; j < M; j++) {
-                const float * from = chunks > 1 ? noise[(size_t) j].data() : (*songs)[(size_t) i * M + j].latents.data();
+                const float * from =
+                    chunks > 1 ? noise[(size_t) j].data() : (*songs)[(size_t) i * M + j].latents.data();
                 memcpy(block.data() + span * j, from + (size_t) start * YUE2_LATENT_DIM, span * sizeof(float));
             }
             if (!nar_solve(nar, &p->kv, block.data(), frames, M, ar_len, i, r.steps, dbg, cancelled, cancel_data,
@@ -1015,8 +1017,8 @@ static bool pipeline_generate(Yue2Pipeline *          p,
                 memcpy(to + (size_t) fade * YUE2_LATENT_DIM, solved + (size_t) fade * YUE2_LATENT_DIM,
                        (size_t) (frames - dropped - fade) * YUE2_LATENT_DIM * sizeof(float));
             }
-            fprintf(stderr, "[NAR] Song %d chunk %d/%d: %d frames, cache %d rows, %d forwarded, %.1f s\n", i,
-                    chunk + 1, chunks, frames, ar_len, ar_len - kept, chunk_timer.ms() / 1000.0);
+            fprintf(stderr, "[NAR] Song %d chunk %d/%d: %d frames, cache %d rows, %d forwarded, %.1f s\n", i, chunk + 1,
+                    chunks, frames, ar_len, ar_len - kept, chunk_timer.ms() / 1000.0);
         }
 
         // A song is decoded as soon as its latents stand, so the first of several is heard while the rest are made.

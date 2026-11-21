@@ -22,8 +22,8 @@ static bool near(float a, float b) {
 }
 
 static const std::vector<std::string> VOCAB = {
-    "K:C\n", "K:Em\n", "% verse\n", "% chorus\n", "\"C\"", "\"G\"", "\"F#\"", "\"Am\"", "z16|", "\n",
-    "%",     " ch",    "orus\n",    " verse\n",   "\"",    "C",     "G",      "x",
+    "K:C\n", "K:Em\n", "% verse\n", "% chorus\n", "\"C\"",    "\"G\"", "\"F#\"", "\"Am\"", "z16|",
+    "\n",    "%",      " ch",       "orus\n",     " verse\n", "\"",    "C",      "G",      "x",
 };
 
 static int id_of(const std::string & text) {
@@ -35,7 +35,9 @@ static int id_of(const std::string & text) {
     return -1;
 }
 
-static void feed(const Yue2HarmonyPlan & plan, Yue2HarmonyState * st, std::vector<int> * tokens,
+static void feed(const Yue2HarmonyPlan &             plan,
+                 Yue2HarmonyState *                  st,
+                 std::vector<int> *                  tokens,
                  std::initializer_list<const char *> texts) {
     for (const char * t : texts) {
         tokens->push_back(id_of(t));
@@ -55,7 +57,7 @@ int main() {
     }
     {  // a chord's share of the recent changes, holding free up to the limit
         Yue2Harmony h;
-        h.strength          = 4.0f;
+        h.strength            = 4.0f;
         Yue2HarmonyPlan  plan = yue2_harmony_plan(h, &VOCAB, END);
         Yue2HarmonyState st;
         std::vector<int> tokens;
@@ -68,8 +70,8 @@ int main() {
     }
     {  // past the hold limit, staying costs more with every symbol
         Yue2Harmony h;
-        h.strength          = 4.0f;
-        h.hold_limit        = 2;
+        h.strength            = 4.0f;
+        h.hold_limit          = 2;
         Yue2HarmonyPlan  plan = yue2_harmony_plan(h, &VOCAB, END);
         Yue2HarmonyState st;
         std::vector<int> tokens;
@@ -80,8 +82,8 @@ int main() {
     }
     {  // a root outside the key gains, until enough changes are outside already
         Yue2Harmony h;
-        h.outside_bonus     = 3.0f;
-        h.outside_limit     = 0.25f;
+        h.outside_bonus       = 3.0f;
+        h.outside_limit       = 0.25f;
         Yue2HarmonyPlan  plan = yue2_harmony_plan(h, &VOCAB, END);
         Yue2HarmonyState st;
         std::vector<int> tokens;
@@ -93,7 +95,7 @@ int main() {
     }
     {  // a section may not open the way the one before did
         Yue2Harmony h;
-        h.section_strength  = 5.0f;
+        h.section_strength    = 5.0f;
         Yue2HarmonyPlan  plan = yue2_harmony_plan(h, &VOCAB, END);
         Yue2HarmonyState st;
         std::vector<int> tokens;
@@ -107,10 +109,10 @@ int main() {
     }
     {  // the structure: the next name after "%", no "%" past the list, no end before it is done
         Yue2Harmony h;
-        h.follow            = { "verse", "chorus" };
-        Yue2HarmonyPlan  plan = yue2_harmony_plan(h, &VOCAB, END);
-        Yue2HarmonyState st;
-        std::vector<int> tokens;
+        h.follow                = { "verse", "chorus" };
+        Yue2HarmonyPlan    plan = yue2_harmony_plan(h, &VOCAB, END);
+        Yue2HarmonyState   st;
+        std::vector<int>   tokens;
         std::vector<float> logits((size_t) END + 1, 0.0f), out;
         feed(plan, &st, &tokens, { "% verse\n", "\"C\"", "\n", "%" });
         check(yue2_harmony_apply(plan, &st, logits.data(), END + 1, 64, &out), "the structure steers");
@@ -125,14 +127,18 @@ int main() {
     }
     {  // a progression: a chord symbol opened in a section spells that section's next chord
         Yue2Harmony h;
-        h.progressions       = { { "verse", { "C", "G" } }, { "*", { "Am" } } };
+        h.progressions = {
+            { "verse", { "C", "G" } },
+            { "*",     { "Am" }     }
+        };
         check(yue2_harmony_valid(h), "progressions are valid");
         Yue2HarmonyPlan    plan = yue2_harmony_plan(h, &VOCAB, END);
         Yue2HarmonyState   st;
         std::vector<int>   tokens;
         std::vector<float> logits((size_t) END + 1, 0.0f), out;
         feed(plan, &st, &tokens, { "K:C\n" });
-        check(yue2_harmony_apply(plan, &st, logits.data(), END + 1, 64, &out), "before a section the \"*\" list steers");
+        check(yue2_harmony_apply(plan, &st, logits.data(), END + 1, 64, &out),
+              "before a section the \"*\" list steers");
         check(near(out[(size_t) id_of("\"Am\"")], 0.0f), "Am is the chord of any section");
         check(near(out[(size_t) id_of("\"C\"")], -YUE2_FOLLOW_BOOST), "C is not");
         feed(plan, &st, &tokens, { "% verse\n" });
@@ -157,9 +163,13 @@ int main() {
         feed(plan, &st, &tokens, { "\n", "% chorus\n" });
         check(yue2_harmony_apply(plan, &st, logits.data(), END + 1, 64, &out), "a section without a list");
         check(near(out[(size_t) id_of("\"Am\"")], 0.0f), "takes the \"*\" list");
-        h.progressions = { { "verse", { "x" } } };
+        h.progressions = {
+            { "verse", { "x" } }
+        };
         check(!yue2_harmony_valid(h), "a symbol starts with its root");
-        h.progressions = { { "verse", {} } };
+        h.progressions = {
+            { "verse", {} }
+        };
         check(!yue2_harmony_valid(h), "an empty list is no progression");
     }
     {  // off changes nothing

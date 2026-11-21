@@ -21,17 +21,17 @@ void request_init(Yue2Request * r) {
     r->abc    = "";
     r->cot    = "full";
 
-    r->duration         = 360.0f;
-    r->lm_seed          = -1;
-    r->seed             = -1;
-    r->steps            = 32;
-    r->solver           = "midpoint";
-    r->lm_batch_size    = 1;
-    r->synth_batch_size = 1;
-    r->peak_clip        = 10;
-    r->cfg_scale        = -1.0f;
-    r->companion_scale  = 1.0f;
-    r->semantic_tokens  = "";
+    r->duration                 = 360.0f;
+    r->lm_seed                  = -1;
+    r->seed                     = -1;
+    r->steps                    = 32;
+    r->solver                   = "midpoint";
+    r->lm_batch_size            = 1;
+    r->synth_batch_size         = 1;
+    r->peak_clip                = 10;
+    r->cfg_scale                = -1.0f;
+    r->companion_scale          = 1.0f;
+    r->semantic_tokens          = "";
     r->continue_semantic_tokens = false;
     r->abc_continue             = false;
 
@@ -44,9 +44,9 @@ void request_init(Yue2Request * r) {
     r->adapters.clear();
     r->lyric_schedule = Yue2LyricSchedule();
     r->harmony        = Yue2Harmony();
-    r->source_tokens = "";
-    r->source_start  = 0.0f;
-    r->source_end    = -1.0f;
+    r->source_tokens  = "";
+    r->source_start   = 0.0f;
+    r->source_end     = -1.0f;
 }
 
 static inline std::string yy_str(yyjson_val * v) {
@@ -202,12 +202,18 @@ static bool request_parse_harmony(yyjson_val * node, Yue2Harmony * h) {
         }
         h->by_root = yy_str(v) == "root";
     }
+
     struct Num {
         const char * key;
         float *      out;
     };
-    for (Num n : { Num{ "strength", &h->strength }, Num{ "outside_bonus", &h->outside_bonus },
-                   Num{ "outside_limit", &h->outside_limit }, Num{ "section_strength", &h->section_strength } }) {
+
+    for (Num n : {
+             Num{ "strength",         &h->strength         },
+             Num{ "outside_bonus",    &h->outside_bonus    },
+             Num{ "outside_limit",    &h->outside_limit    },
+             Num{ "section_strength", &h->section_strength }
+    }) {
         if ((v = yyjson_obj_get(node, n.key))) {
             if (!yyjson_is_num(v)) {
                 return fail("numbers must be numbers");
@@ -215,12 +221,17 @@ static bool request_parse_harmony(yyjson_val * node, Yue2Harmony * h) {
             *n.out = (float) yyjson_get_num(v);
         }
     }
+
     struct Int {
         const char * key;
         int *        out;
     };
-    for (Int n : { Int{ "window", &h->window }, Int{ "hold_limit", &h->hold_limit },
-                   Int{ "section_open", &h->section_open } }) {
+
+    for (Int n : {
+             Int{ "window",       &h->window       },
+             Int{ "hold_limit",   &h->hold_limit   },
+             Int{ "section_open", &h->section_open }
+    }) {
         if ((v = yyjson_obj_get(node, n.key))) {
             if (!yyjson_is_int(v)) {
                 return fail("counts must be integers");
@@ -275,9 +286,10 @@ static bool request_parse_harmony(yyjson_val * node, Yue2Harmony * h) {
         }
     }
     if (!yue2_harmony_valid(*h)) {
-        return fail("is out of bounds: strength 0-64, window 1-512, hold_limit 0-64, outside_bonus 0-20, "
-                    "outside_limit 0-1, section_strength 0-64, section_open 1-16, up to 64 section names, chords of "
-                    "up to 64 sections with 1-64 symbols each, a symbol starting with its root A-G");
+        return fail(
+            "is out of bounds: strength 0-64, window 1-512, hold_limit 0-64, outside_bonus 0-20, "
+            "outside_limit 0-1, section_strength 0-64, section_open 1-16, up to 64 section names, chords of "
+            "up to 64 sections with 1-64 symbols each, a symbol starting with its root A-G");
     }
     return true;
 }

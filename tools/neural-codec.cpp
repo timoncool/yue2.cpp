@@ -147,7 +147,7 @@ static bool write_latent_q4(const char * path, const float * data, int T_latent)
             int   hi  = (int) (vhi < 0 ? vhi - 0.5f : vhi + 0.5f);
             lo        = lo < -7 ? -7 : (lo > 7 ? 7 : lo);
             hi        = hi < -7 ? -7 : (hi > 7 ? 7 : hi);
-            packed[j] = (uint8_t) ((lo & 0x0F) | (hi << 4));
+            packed[j] = (uint8_t) ((lo & 0x0F) | ((hi & 0x0F) << 4));
         }
         fwrite(packed, 1, LATENT_CH / 2, f);
     }
@@ -181,14 +181,18 @@ static float * read_latent(const char * path, int * T_latent) {
             fclose(f);
             return nullptr;
         }
-        long frame    = q8 ? NAC8_FRAME : NAC4_FRAME;
-        long expected = (q8 ? NAC8_HEADER : NAC4_HEADER) + (long) t * frame;
-        if (size != expected) {
-            fprintf(stderr, "[VAE] FATAL: %s size %ld, expected %ld for %u frames\n", path, size, expected, t);
+        const long frame  = q8 ? NAC8_FRAME : NAC4_FRAME;
+        const long header = q8 ? NAC8_HEADER : NAC4_HEADER;
+        if (!t || size < header || (size - header) % frame != 0 || (size - header) / frame != t) {
+            fprintf(stderr, "[VAE] FATAL: %s size %ld does not match %u frames\n", path, size, t);
             fclose(f);
             return nullptr;
         }
         float * data = (float *) malloc((size_t) t * LATENT_CH * sizeof(float));
+        if (!data) {
+            fclose(f);
+            return nullptr;
+        }
         for (uint32_t i = 0; i < t; i++) {
             ggml_fp16_t scale_f16;
             if (fread(&scale_f16, 2, 1, f) != 1) {
@@ -231,7 +235,7 @@ static float * read_latent(const char * path, int * T_latent) {
 
     // Raw f32, rewind past the magic probe
     long frame_bytes = (long) LATENT_CH * sizeof(float);
-    if (size % frame_bytes != 0) {
+    if (size <= 0 || size % frame_bytes != 0) {
         fprintf(stderr, "[VAE] FATAL: %s size %ld is not a multiple of %ld\n", path, size, frame_bytes);
         fclose(f);
         return nullptr;
@@ -239,7 +243,7 @@ static float * read_latent(const char * path, int * T_latent) {
     fseek(f, 0, SEEK_SET);
     *T_latent    = (int) (size / frame_bytes);
     float * data = (float *) malloc((size_t) size);
-    if (fread(data, 1, (size_t) size, f) != (size_t) size) {
+    if (!data || fread(data, 1, (size_t) size, f) != (size_t) size) {
         free(data);
         fclose(f);
         return nullptr;
@@ -385,6 +389,12 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             planar = (float *) malloc((size_t) T_rs * 2 * sizeof(float));
+            if (!planar) {
+                fprintf(stderr, "[VAE] FATAL: cannot allocate resampled stereo audio\n");
+                free(left);
+                free(right);
+                return 1;
+            }
             memcpy(planar, left, (size_t) T_rs * sizeof(float));
             memcpy(planar + T_rs, right, (size_t) T_rs * sizeof(float));
             free(left);

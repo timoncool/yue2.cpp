@@ -32,10 +32,16 @@ template <typename Field> static double solved(Yue2Solver solver, int steps, Fie
 }
 
 int main() {
-    auto exponential = [](float x, float) { return -x; };
-    auto timed       = [](float, float t) { return -2.0f * t; };
-    auto constant    = [](float, float) { return 0.25f; };
-    int  evals       = 0;
+    auto exponential = [](float x, float) {
+        return -x;
+    };
+    auto timed = [](float, float t) {
+        return -2.0f * t;
+    };
+    auto constant = [](float, float) {
+        return 0.25f;
+    };
+    int evals = 0;
 
     check(std::fabs(solved(YUE2_SOLVER_AB2, 16, constant, &evals) - 0.75) < 1e-5, "a constant field is exact");
     check(evals == 17, "ab2 spends S + 1 evaluations");

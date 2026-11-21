@@ -56,11 +56,11 @@ struct LoraTensor {
 
 // One term on one GGUF tensor
 struct LoraTerm {
-    LoraTermRole   role;  // LORA_TERM_A for a LoRA pair, LORA_TERM_DIFF, LORA_TERM_FULL
-    LoraTensor a;     // A [rank, in], or D, or F
-    LoraTensor b;     // B [out, rank], rows [row0, row0 + rows) land on the tensor
-    int64_t       row0;
-    float         scale;
+    LoraTermRole role;  // LORA_TERM_A for a LoRA pair, LORA_TERM_DIFF, LORA_TERM_FULL
+    LoraTensor   a;     // A [rank, in], or D, or F
+    LoraTensor   b;     // B [out, rank], rows [row0, row0 + rows) land on the tensor
+    int64_t      row0;
+    float        scale;
 };
 
 // The terms of a merge, by GGUF tensor name
@@ -90,11 +90,11 @@ template <typename F> static void lora_rows(int64_t nrows, F fn) {
 }
 
 // Sums the terms into the staged copy of one GGUF tensor
-static bool lora_merge_tensor(WeightCtx *                      wctx,
-                                 WeightCtx::PendingCopy *         pc,
-                                 const struct ggml_tensor *       meta,
-                                 const std::vector<LoraTerm> & terms,
-                                 ggml_backend_t                   backend) {
+static bool lora_merge_tensor(WeightCtx *                   wctx,
+                              WeightCtx::PendingCopy *      pc,
+                              const struct ggml_tensor *    meta,
+                              const std::vector<LoraTerm> & terms,
+                              ggml_backend_t                backend) {
     const int64_t        ne0  = meta->ne[0];
     const int64_t        ne1  = ggml_nrows(meta);
     const enum ggml_type type = meta->type;

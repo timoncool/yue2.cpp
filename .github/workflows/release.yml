@@ -1,263 +1,152 @@
 name: Build & Release Binaries
-
 on:
   release:
     types: [published]
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag to attach binaries to (e.g. v0.1.0)'
-        required: true
+        description: Full version tag. Leave empty for artifact-only validation.
         type: string
-      skip_linux:
-        description: 'Skip Linux build'
-        required: false
-        type: boolean
-        default: false
-      skip_mac:
-        description: 'Skip macOS build'
-        required: false
-        type: boolean
-        default: false
-      skip_windows:
-        description: 'Skip Windows build'
-        required: false
-        type: boolean
-        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build-linux:
-    name: Build · linux-x64
-    runs-on: ubuntu-22.04
-    if: github.event_name != 'workflow_dispatch' || !inputs.skip_linux
-
+  select:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'release' || startsWith(github.event.release.tag_name, 'v')
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      ref: ${{ steps.tag.outputs.ref }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install build tools
+      - id: tag
+        env:
+          TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq cmake build-essential pkg-config libopenblas-dev
+          set -euo pipefail
+          if [[ -n "$TAG" && ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9.-]+)?$ ]]; then
+            echo 'Full distributions require a vMAJOR.MINOR.PATCH tag.' >&2
+            exit 1
+          fi
+          printf 'tag=%s\nref=%s\n' "$TAG" "${TAG:-$GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+  build:
+    needs: select
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-22.04, package: linux-x64}
+          - {os: macos-15, package: macos-arm64-metal}
+          - {os: windows-2022, package: windows-x64}
+    steps:
+      - uses: actions/checkout@v4
         with:
-          create-symlink: true
-          key: build-linux-ubuntu-22.04
-
-      - name: Install CUDA toolkit
+          ref: ${{ needs.select.outputs.ref }}
+          submodules: recursive
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build pkg-config libopenblas-dev
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - if: runner.os != 'macOS'
         uses: Jimver/cuda-toolkit@v0.2.30
         with:
-          log-file-suffix: 'ubuntu-22.04.txt'
-
-      - name: Install Vulkan SDK
+          cuda: '13.1.0'
+          method: network
+      - if: runner.os != 'macOS'
         uses: humbletim/install-vulkan-sdk@v1.2
         with:
           version: 1.4.309.0
           cache: true
-
-      - name: Configure & Build
-        run: |
-          ./buildall.sh
-
-      - name: Smoke test
-        continue-on-error: true
-        shell: bash
-        run: |
-          BIN="build"
-          "$BIN/mm-lm"         2>&1 | head -5
-          "$BIN/mm-synth"      2>&1 | head -5
-          "$BIN/mm-server" 2>&1 | head -5
-          "$BIN/neural-codec"   2>&1 | head -5
-          "$BIN/quantize"       2>&1 | head -3
-          "$BIN/"      2>&1 | head -3
-
-      - name: Resolve release tag
-        id: tag
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "value=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "value=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Package binaries
-        run: |
-          mkdir -p dist
-          cp build/mm-* \
-             build/quantize build/build/ build/*.so dist/
-          tar -C dist -czf "minimaxmusic-linux-x64.tar.gz" .
-
-      - name: Upload to release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${{ steps.tag.outputs.value }}" \
-            "minimaxmusic-linux-x64.tar.gz" \
-            --clobber
-
-  build-mac:
-    name: Build · macos-arm64-metal
-    runs-on: macos-latest
-    if: github.event_name != 'workflow_dispatch' || !inputs.skip_mac
-
-    steps:
-      - name: Checkout
+      - if: runner.os == 'Windows'
         uses: actions/checkout@v4
         with:
-          submodules: recursive
-
-      - name: ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          create-symlink: true
-          key: build-mac-macos-latest
-
-      - name: Configure & Build
-        run: |
-          mkdir build
-          cd build
-          cmake ..
-          cmake --build . --config Release -j "$(nproc)"
-
-      - name: Smoke test
-        continue-on-error: true
+          repository: KhronosGroup/SPIRV-Headers
+          ref: 09913f088a1197aba4aefd300a876b2ebbaa3391 # vulkan-sdk-1.4.309.0
+          path: spirv-headers
+      - name: Configure, build, and stage
         shell: bash
+        env:
+          PACKAGE: ${{ matrix.package }}
         run: |
-          BIN="build"
-          "$BIN/mm-lm"         2>&1 | head -5
-          "$BIN/mm-synth"      2>&1 | head -5
-          "$BIN/mm-server" 2>&1 | head -5
-          "$BIN/neural-codec"   2>&1 | head -5
-          "$BIN/quantize"       2>&1 | head -3
-          "$BIN/"      2>&1 | head -3
-
-      - name: Resolve release tag
-        id: tag
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "value=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          flags=(-G Ninja -DCMAKE_BUILD_TYPE=Release)
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            flags+=(-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON
+                    -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON -DCMAKE_INSTALL_RPATH=@loader_path)
           else
-            echo "value=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
+            nvcc --version
+            flags+=(-DGGML_NATIVE=OFF -DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON
+                    -DGGML_CUDA=ON -DGGML_CUDA_NCCL=OFF -DGGML_CUDA_FA_QUANTS=all -DGGML_VULKAN=ON)
+            if [[ "$RUNNER_OS" == Linux ]]; then
+              flags+=(-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON '-DCMAKE_INSTALL_RPATH=$ORIGIN')
+            else
+              spirv_prefix="$(pwd -W)/spirv-headers-install"
+              cmake -S spirv-headers -B spirv-headers-build -G Ninja
+              cmake --install spirv-headers-build --prefix "$spirv_prefix"
+              flags+=("-DCMAKE_PREFIX_PATH=$spirv_prefix")
+            fi
           fi
-
-      - name: Package binaries
-        run: |
-          mkdir -p dist
-          cd build
-          for bin in mm-* quantize ; do
-            install_name_tool -add_rpath @executable_path "$bin"
+          cmake -S . -B build "${flags[@]}"
+          cmake --build build --parallel 4
+          mkdir dist
+          ext=
+          if [[ "$RUNNER_OS" == Windows ]]; then ext=.exe; fi
+          for tool in yue-server yue-synth yue-plan yue-tokenize yue-transcribe neural-codec mp3-codec quantize; do
+            cp "build/$tool$ext" dist/
           done
-          cp -P mm-* quantize  libggml*.dylib ../dist/
-          cd ..
-          tar -C dist -czf "minimaxmusic-macos-arm64-metal.tar.gz" .
+          case "$RUNNER_OS" in
+            Windows)
+              cp build/*.dll dist/
+              test -f dist/ggml-cuda.dll
+              test -f dist/ggml-vulkan.dll
+              ;;
+            Linux)
+              cp -P build/libggml*.so* dist/
+              test -f dist/libggml-cuda.so
+              test -f dist/libggml-vulkan.so
+              readelf -d dist/yue-server | grep -F '$ORIGIN'
+              ;;
+            macOS)
+              cp -P build/libggml*.dylib dist/
+              for binary in dist/*; do
+                [[ -L "$binary" ]] && continue
+                test "$(lipo -archs "$binary")" = arm64
+                minos=$(xcrun vtool -show-build "$binary" | awk '$1 == "minos" {print $2}')
+                test "$minos" = 13.0
+              done
+              ;;
+          esac
+          "dist/yue-server$ext" --help > usage.txt 2>&1 || test "$?" -eq 1
+          grep -F 'Usage' usage.txt
+          if [[ "$RUNNER_OS" != Windows ]]; then tar -C dist -czf "yue2-$PACKAGE.tar.gz" .; fi
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path 'dist/*' -DestinationPath 'yue2-windows-x64.zip'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yue2-${{ matrix.package }}
+          path: |
+            yue2-*.tar.gz
+            yue2-*.zip
+          if-no-files-found: error
 
-      - name: Upload to release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${{ steps.tag.outputs.value }}" \
-            "minimaxmusic-macos-arm64-metal.tar.gz" \
-            --clobber
-
-  build-windows:
-    name: Build · windows-x64
-    runs-on: windows-latest
-    if: github.event_name != 'workflow_dispatch' || !inputs.skip_windows
-
+  publish:
+    needs: [select, build]
+    if: needs.select.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          submodules: recursive
-
-      - name: Cache CUDA toolkit
-        id: cache-cuda
-        uses: actions/cache@v4
-        with:
-          path: C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA
-          key: cuda-12-windows-latest
-
-      - name: Install CUDA toolkit
-        if: steps.cache-cuda.outputs.cache-hit != 'true'
-        uses: Jimver/cuda-toolkit@v0.2.30
-        with:
-          log-file-suffix: 'windows-latest.txt'
-
-      - name: Install Vulkan SDK
-        uses: humbletim/install-vulkan-sdk@v1.2
-        with:
-          version: 1.4.309.0
-          cache: true
-
-      - name: Cache build directory
-        uses: actions/cache@v4
-        with:
-          path: build-msvc
-          key: build-msvc-${{ github.sha }}
-          restore-keys: |
-            build-msvc-
-
-      - name: Configure & Build
-        shell: pwsh
-        run: |
-          # Configure — only print errors
-          cmake -S . -B build-msvc `
-            -DGGML_CPU_ALL_VARIANTS=ON `
-            -DGGML_CUDA=ON `
-            -DGGML_VULKAN=ON `
-            -DGGML_BACKEND_DL=ON `
-            --log-level=ERROR 2>&1 | Where-Object { $_ -notmatch '^--' }
-
-          # Build — suppress per-file progress, only show warnings/errors
-          cmake --build build-msvc --config Release -j $env:NUMBER_OF_PROCESSORS `
-            -- /v:minimal /consoleloggerparameters:ErrorsOnly 2>&1 `
-            | Where-Object { $_ -match '(error|warning|FAILED|fatal)' -or $_ -eq '' } `
-            | Select-Object -Last 50
-
-      - name: Smoke test
-        continue-on-error: true
-        shell: bash
-        run: |
-          BIN="build-msvc/Release"
-          "$BIN/mm-lm.exe"         2>&1 | head -5
-          "$BIN/mm-synth.exe"      2>&1 | head -5
-          "$BIN/mm-server.exe" 2>&1 | head -5
-          "$BIN/neural-codec.exe"   2>&1 | head -5
-          "$BIN/quantize.exe"       2>&1 | head -3
-          "$BIN/.exe"      2>&1 | head -3
-
-      - name: Resolve release tag
-        id: tag
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "value=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
-          else
-            echo "value=${{ inputs.release_tag }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Package binaries
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Path dist | Out-Null
-          Copy-Item "build-msvc\Release\*.exe" dist\ -ErrorAction SilentlyContinue
-          Copy-Item "build-msvc\Release\*.dll" dist\ -ErrorAction SilentlyContinue
-          Compress-Archive -Path dist\* -DestinationPath "minimaxmusic-windows-x64.zip"
-
-      - name: Upload to release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: pwsh
-        run: |
-          gh release upload "${{ steps.tag.outputs.value }}" `
-            "minimaxmusic-windows-x64.zip" `
-            --clobber
+          pattern: yue2-*
+          merge-multiple: true
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.select.outputs.tag }}
+        run: gh release upload "$TAG" yue2-*.tar.gz yue2-*.zip

@@ -1,0 +1,74 @@
+name: Package Windows HIP components
+on:
+  workflow_dispatch:
+    inputs:
+      engine_run:
+        description: Successful Windows HIP build run
+        required: true
+        type: string
+  push:
+    branches: [music-round/native-hip-current]
+    paths: [.github/workflows/hip-package.yml, tools/package-windows-hip.py, tools/windows-hip-notices.txt]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch the compiled engine and LLVM runtime
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENGINE_RUN: ${{ inputs.engine_run }}
+        run: |
+          $id = $env:ENGINE_RUN
+          if (!$id) {
+            $id = gh run list --workflow hip-build.yml --branch $env:GITHUB_REF_NAME --status success -L 1 --json databaseId --jq '.[0].databaseId'
+          }
+          if ($id -notmatch '^\d+$') { throw "No completed Windows HIP build" }
+          $run = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$id" | ConvertFrom-Json
+          if ($run.conclusion -ne 'success' -or $run.path -ne '.github/workflows/hip-build.yml') { throw "Unexpected engine run" }
+          gh run download $id -n yue2-hip-engine-gfx1036-gfx1100 -D engine
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          if (!(Test-Path engine/LICENSE-LLVM-OpenMP.txt)) {
+            # Initial engine artifact predates embedding OpenMP. Use its tested LLVM build.
+            if ($run.head_sha -ne '188d13b3d619cc0fd13f47db9ff64e0bd815d577') { throw "Engine artifact lacks LLVM OpenMP" }
+            gh run download 44868119681 -n windows-x64-llvm-openmp -D engine
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          "ENGINE_SHA=$($run.head_sha)" >> $env:GITHUB_ENV
+      - name: Fetch AMD 10.1 runtime files
+        shell: pwsh
+        run: |
+          $base = 'https://stable.repo.amd.com/rocm/core/whl-next'
+          foreach ($name in 'rocm-sdk-core','rocm-sdk-libraries','rocm-sdk-device-gfx1036','rocm-sdk-device-gfx1100') {
+            $file = ($name -replace '-', '_') + '-10.1.0-py3-none-win_amd64.whl'
+            curl.exe --fail --location --retry 3 "$base/$name/$file" -o "$name.whl"
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          }
+          mkdir sdk
+          tar -xf rocm-sdk-core.whl -C sdk _rocm_sdk_core/bin _rocm_sdk_core/share/doc
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Assemble per-device archives
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}/Microsoft Visual Studio/Installer/vswhere.exe" -latest -products '*' -property installationPath
+          $crt = Get-ChildItem "$vs/VC/Redist/MSVC/14.44*/x64/Microsoft.VC*.CRT" -Directory | Select-Object -Last 1
+          if (!$crt) { throw "MSVC 14.44 redistributable missing" }
+          foreach ($arch in 'gfx1036','gfx1100') {
+            $zip = "packages/yue2-windows-$arch.zip"
+            python tools/package-windows-hip.py --engine engine --engine-revision $env:ENGINE_SHA --openmp engine --sdk sdk/_rocm_sdk_core --crt $crt.FullName --device "rocm-sdk-device-$arch.whl" --libraries rocm-sdk-libraries.whl --arch $arch --out $zip
+            if ($LASTEXITCODE) { exit $LASTEXITCODE }
+            $hash = (Get-FileHash $zip).Hash
+            "engine $env:ENGINE_SHA | $arch | $((Get-Item $zip).Length) bytes | SHA-256 $hash" >> $env:GITHUB_STEP_SUMMARY
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yue2-windows-hip-packages
+          path: packages/*.zip
+          compression-level: 0
+          if-no-files-found: error

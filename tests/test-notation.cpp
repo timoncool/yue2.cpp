@@ -52,7 +52,8 @@ static void expect(bool condition, const char * what) {
 
 static void expect_span(const NotMeasure & m, int start, int end, const char * what) {
     if (m.start_beat != start || m.end_beat != end) {
-        fprintf(stderr, "[Test-Notation] FAIL: %s (measure [%d,%d), expected [%d,%d))\n", what, m.start_beat, m.end_beat, start, end);
+        fprintf(stderr, "[Test-Notation] FAIL: %s (measure [%d,%d), expected [%d,%d))\n", what, m.start_beat,
+                m.end_beat, start, end);
         exit(1);
     }
 }
@@ -79,10 +80,10 @@ static void clean_4_4_is_untouched() {
 // The 王北车-画 pattern: a downbeat one beat after the last one (the model
 // labelled a weak beat beat 1), and the new phase keeps going afterwards.
 static void early_downbeat_is_rebarred() {
-    std::vector<int> ids = { 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4,
-                             1,  // the bar starts here
-                             1, 2, 3, 4,  // one beat in, the slip lands
-                             1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4 };
+    std::vector<int>        ids = { 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4,
+                                    1,           // the bar starts here
+                                    1, 2, 3, 4,  // one beat in, the slip lands
+                                    1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4 };
     std::vector<NotMeasure> measures;
     expect(infer(grid(ids), &measures), "slipped 4/4 reads");
     expect(measures.size() == 8, "slipped 4/4 has 8 measures");
@@ -94,7 +95,7 @@ static void early_downbeat_is_rebarred() {
 
 // The 借 pattern: three beats then one before the next real downbeat.
 static void three_one_pair_is_rebarred() {
-    std::vector<int> ids = { 1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2 };
+    std::vector<int>        ids = { 1, 2, 3, 4, 1, 2, 3, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1, 2 };
     // downbeats 0, 4, 7, 11, 15, 19: spans 4, 3, 4, 4, 4
     std::vector<NotMeasure> measures;
     expect(infer(grid(ids), &measures), "3+1 reads");
@@ -105,7 +106,7 @@ static void three_one_pair_is_rebarred() {
 // A short first span is a pickup: it keeps its notes and takes the following
 // meter with a leading rest.
 static void pickup_is_padded() {
-    std::vector<int> ids = { 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1 };
+    std::vector<int>        ids = { 3, 4, 1, 2, 3, 4, 1, 2, 3, 4, 1 };
     std::vector<NotMeasure> measures;
     expect(infer(grid(ids), &measures), "pickup reads");
     expect(measures.size() == 3, "pickup plus two measures");
@@ -133,8 +134,14 @@ static void waltz_stays_three() {
 // span is left alone.
 static void mixed_meter_span_is_kept() {
     std::vector<NotBeat> beats = {
-        { 0.0, 1, 4, 4 }, { 0.5, 2, 4, 4 }, { 1.0, 3, 4, 4 }, { 1.5, 4, 4, 4 },
-        { 2.0, 1, 4, 4 }, { 2.5, 2, 3, 4 }, { 3.0, 3, 3, 4 }, { 3.5, 4, 3, 4 },
+        { 0.0, 1, 4, 4 },
+        { 0.5, 2, 4, 4 },
+        { 1.0, 3, 4, 4 },
+        { 1.5, 4, 4, 4 },
+        { 2.0, 1, 4, 4 },
+        { 2.5, 2, 3, 4 },
+        { 3.0, 3, 3, 4 },
+        { 3.5, 4, 3, 4 },
         { 4.0, 1, 3, 4 },
     };
     std::vector<NotMeasure> measures;
